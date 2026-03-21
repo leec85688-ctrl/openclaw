@@ -293,6 +293,34 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   return capabilities.usesChromeMcp;
 }
 
+function resolveManagedProfileForOperationalAction(
+  action: string,
+  profileName: string | undefined,
+) {
+  if (action !== "tabs" || !profileName || !shouldPreferHostForProfile(profileName)) {
+    return profileName;
+  }
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const seen = new Set<string>();
+  const candidates = [resolved.defaultProfile, "openclaw", ...Object.keys(resolved.profiles ?? {})];
+  for (const rawCandidate of candidates) {
+    const candidate = typeof rawCandidate === "string" ? rawCandidate.trim() : "";
+    if (!candidate || candidate === profileName || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    const resolvedCandidate = resolveProfile(resolved, candidate);
+    if (!resolvedCandidate) {
+      continue;
+    }
+    if (!getBrowserProfileCapabilities(resolvedCandidate).usesChromeMcp) {
+      return candidate;
+    }
+  }
+  return profileName;
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -306,8 +334,9 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
+      'Browser choice: omit profile by default or use profile="openclaw" for the isolated OpenClaw-managed browser.',
+      'Never use profile="user" for public websites, monitoring, status/tabs checks, or any task that does not explicitly require existing cookies/login state.',
+      'For the logged-in user browser on the local host, use profile="user" only when existing logins/cookies matter and the user is present. A supported Chromium-based browser (v144+) must already be running.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -319,9 +348,13 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const requestedProfile = readStringParam(params, "profile");
+      let profile = resolveManagedProfileForOperationalAction(action, requestedProfile);
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
+      if (profile !== requestedProfile && !target && !requestedNode) {
+        target = "host";
+      }
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');

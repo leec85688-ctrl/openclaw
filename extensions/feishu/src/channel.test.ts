@@ -7,6 +7,7 @@ const addReactionFeishuMock = vi.hoisted(() => vi.fn());
 const listReactionsFeishuMock = vi.hoisted(() => vi.fn());
 const removeReactionFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -44,6 +45,7 @@ vi.mock("./channel.runtime.js", () => ({
     removePinFeishu: removePinFeishuMock,
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
+    sendMediaFeishu: sendMediaFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
     feishuOutbound: {
       sendText: vi.fn(),
@@ -202,6 +204,131 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
+  });
+
+  it("rejects manual image cards and tells callers to use media sends", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: {
+            schema: "2.0",
+            body: {
+              elements: [{ tag: "img", img_key: "img_v3_test" }],
+            },
+          },
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow(
+      "Feishu screenshots/images/files must be sent with media/path/filePath",
+    );
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("sends media messages without requiring text or card", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_media", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", media: "/tmp/test.png" },
+      cfg,
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      toolContext: {},
+    } as never);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      mediaUrl: "/tmp/test.png",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+      mediaLocalRoots: ["/tmp"],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ ok: true, messageId: "om_media", chatId: "oc_group_1" });
+  });
+
+  it("sends caption text before media attachments", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_caption", chatId: "oc_group_1" });
+    sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_media", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        caption: "look at this",
+        media: "/tmp/test.png",
+      },
+      cfg,
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      toolContext: {},
+    } as never);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "look at this",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      mediaUrl: "/tmp/test.png",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+      mediaLocalRoots: ["/tmp"],
+    });
+    expect(result?.details).toMatchObject({
+      ok: true,
+      messageId: "om_media",
+      contentMessageId: "om_caption",
+      mediaMessageId: "om_media",
+    });
+  });
+
+  it("passes thread reply metadata to media sends", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_media_reply", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "thread-reply",
+      params: {
+        to: "chat:oc_group_1",
+        messageId: "om_parent",
+        media: "/tmp/test.png",
+      },
+      cfg,
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      toolContext: {},
+    } as never);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      mediaUrl: "/tmp/test.png",
+      accountId: undefined,
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+      mediaLocalRoots: ["/tmp"],
+    });
+    expect(result?.details).toMatchObject({
+      ok: true,
+      action: "thread-reply",
+      messageId: "om_media_reply",
+    });
   });
 
   it("reads messages", async () => {

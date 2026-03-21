@@ -289,6 +289,133 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
+  it("retries once when heartbeat only reports pending work in Chinese", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+
+      replySpy
+        .mockResolvedValueOnce({
+          text: "今日招标日报仍未生成；browser 已恢复可用，系统其余正常，需继续执行招标监控。",
+        })
+        .mockResolvedValueOnce({
+          text: "已补跑今日招标监控并生成日报。",
+        });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeWhatsAppDeps({ sendWhatsApp }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(replySpy.mock.calls[1]?.[0]?.Body).toContain(
+        "Your previous response was only a status update",
+      );
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        WHATSAPP_GROUP,
+        "已补跑今日招标监控并生成日报。",
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("retries twice and hardens the second follow-up when pending work repeats", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+
+      replySpy
+        .mockResolvedValueOnce({
+          text: "\u4eca\u65e5\u62db\u6807\u65e5\u62a5\u4ecd\u672a\u751f\u6210\uff1bbrowser \u5df2\u6062\u590d\u53ef\u7528\uff0c\u9700\u7ee7\u7eed\u6267\u884c\u3002",
+        })
+        .mockResolvedValueOnce({
+          text: "\u4eca\u65e5\u62a5\u544a\u4ecd\u672a\u751f\u6210\uff0c\u9700\u7ee7\u7eed\u76d1\u63a7\u3002",
+        })
+        .mockResolvedValueOnce({
+          text: "\u5df2\u5b8c\u6210\u8865\u8dd1\uff0c\u62a5\u544a\u8def\u5f84\uff1a/Users/kobe2026/.openclaw/workspace/reports/2026-03-20.md",
+        });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeWhatsAppDeps({ sendWhatsApp }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(3);
+      expect(replySpy.mock.calls[2]?.[0]?.Body).toContain("do not re-read HEARTBEAT.md");
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        WHATSAPP_GROUP,
+        "\u5df2\u5b8c\u6210\u8865\u8dd1\uff0c\u62a5\u544a\u8def\u5f84\uff1a/Users/kobe2026/.openclaw/workspace/reports/2026-03-20.md",
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("does not fall back to the original interim text when the retry returns empty", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+
+      replySpy
+        .mockResolvedValueOnce({
+          text: "\u4eca\u65e5\u62db\u6807\u65e5\u62a5\u4ecd\u672a\u751f\u6210\uff0c\u9700\u7ee7\u7eed\u6267\u884c\u3002",
+        })
+        .mockResolvedValueOnce(undefined);
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeWhatsAppDeps({ sendWhatsApp }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refreshes BodyForAgent on retries even if getReplyFromConfig mutated the prior context", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+
+      replySpy
+        .mockImplementationOnce(async (ctx: { Body: string; BodyForAgent?: string }) => {
+          ctx.BodyForAgent = ctx.Body;
+          return {
+            text: "\u4eca\u65e5\u62db\u6807\u65e5\u62a5\u4ecd\u672a\u751f\u6210\uff0c\u9700\u7ee7\u7eed\u6267\u884c\u3002",
+          };
+        })
+        .mockResolvedValueOnce({
+          text: "\u5df2\u8865\u8dd1\u5b8c\u6210\uff0c\u62a5\u544a\u5df2\u751f\u6210\u3002",
+        });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeWhatsAppDeps({ sendWhatsApp }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(replySpy.mock.calls[1]?.[0]?.BodyForAgent).toContain(
+        "Your previous response was only a status update",
+      );
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        WHATSAPP_GROUP,
+        "\u5df2\u8865\u8dd1\u5b8c\u6210\uff0c\u62a5\u544a\u5df2\u751f\u6210\u3002",
+        expect.any(Object),
+      );
+    });
+  });
+
   it("does not regress updatedAt when restoring heartbeat sessions", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const originalUpdatedAt = 1000;

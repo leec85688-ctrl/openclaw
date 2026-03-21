@@ -142,18 +142,27 @@ function copyDeclaredPluginSkillPaths(params) {
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
+    // Avoid copying directly from pnpm-managed symlink entries under live node_modules.
+    // On this host, fs.cpSync({ dereference: true }) against those symlinked package
+    // paths can leave the source package contents truncated after build. Resolve the
+    // real package directory first, then copy the actual files without dereferencing.
+    const copySourcePath = shouldExcludeNestedNodeModules
+      ? fs.realpathSync(sourcePath)
+      : sourcePath;
     copySkillPathWithRetry({
-      sourcePath,
+      sourcePath: copySourcePath,
       targetPath,
       copyOptions: {
-        dereference: true,
+        dereference: !shouldExcludeNestedNodeModules,
         force: true,
         recursive: true,
         filter: (candidatePath) => {
-          if (!shouldExcludeNestedNodeModules || candidatePath === sourcePath) {
+          if (!shouldExcludeNestedNodeModules || candidatePath === copySourcePath) {
             return true;
           }
-          const relativeCandidate = path.relative(sourcePath, candidatePath).replaceAll("\\", "/");
+          const relativeCandidate = path
+            .relative(copySourcePath, candidatePath)
+            .replaceAll("\\", "/");
           return !relativeCandidate.split("/").includes("node_modules");
         },
       },

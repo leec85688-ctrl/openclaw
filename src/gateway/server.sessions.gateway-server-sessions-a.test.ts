@@ -1253,6 +1253,42 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset stamps reset time and clears heartbeat delivery cache", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now() - 60_000,
+          lastHeartbeatText: "仍在熔断中，已按规则停止重试，等待下次 session reset。",
+          lastHeartbeatSentAt: Date.now() - 120_000,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: Record<string, unknown>;
+    }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "main",
+        reason: "reset",
+      },
+    );
+    expect(reset.ok).toBe(true);
+    if (!reset.ok) {
+      throw new Error("expected reset to succeed");
+    }
+    expect(typeof reset.payload?.entry.lastSessionResetAt).toBe("number");
+    expect(reset.payload?.entry.lastHeartbeatText).toBeUndefined();
+    expect(reset.payload?.entry.lastHeartbeatSentAt).toBeUndefined();
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
     const waitCallCountAtSnapshotClear: number[] = [];

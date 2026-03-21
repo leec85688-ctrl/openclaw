@@ -34,6 +34,7 @@ import {
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { isLikelyInterimCronMessage } from "../cron/isolated-agent/subagent-followup.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -254,6 +255,59 @@ function resolveHeartbeatReasoningPayloads(
     const text = typeof payload.text === "string" ? payload.text : "";
     return text.trimStart().startsWith("Reasoning:");
   });
+}
+
+const HEARTBEAT_INTERIM_FOLLOWUP_PROMPTS = [
+  [
+    "Your previous response was only a status update and did not complete this heartbeat task.",
+    "Complete the required checks or concrete follow-through now.",
+    "Do not send another pending or 'need to continue' update.",
+    "If nothing needs user-facing follow-up, reply HEARTBEAT_OK.",
+  ].join(" "),
+  [
+    "Your previous responses still did not complete this heartbeat task.",
+    "Do not repeat prior pending updates, do not re-read HEARTBEAT.md, and do not repeat the same basic browser or system checks unless the state changed and that change is the blocker.",
+    "Either finish the promised work now and return the concrete result, or reply with one explicit blocker and the exact next action required.",
+    "If nothing needs user-facing follow-up, reply HEARTBEAT_OK.",
+  ].join(" "),
+] as const;
+
+function shouldRetryInterimHeartbeatReply(params: {
+  payload: ReplyPayload | undefined;
+  responsePrefix: string | undefined;
+}) {
+  const payload = params.payload;
+  if (!payload || payload.isError) {
+    return false;
+  }
+  if (payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0 || payload.interactive) {
+    return false;
+  }
+  if (Object.keys(payload.channelData ?? {}).length > 0) {
+    return false;
+  }
+  const rawText = typeof payload.text === "string" ? payload.text : "";
+  const text = stripLeadingHeartbeatResponsePrefix(rawText, params.responsePrefix).trim();
+  return isLikelyInterimCronMessage(text);
+}
+
+function buildHeartbeatReplyContext<
+  T extends {
+    Body: string;
+    BodyForAgent?: string;
+    BodyForCommands?: string;
+    RawBody?: string;
+    CommandBody?: string;
+  },
+>(ctx: T, body: string): T {
+  return {
+    ...ctx,
+    Body: body,
+    BodyForAgent: body,
+    BodyForCommands: body,
+    RawBody: body,
+    CommandBody: body,
+  };
 }
 
 async function restoreHeartbeatUpdatedAt(params: {
@@ -486,6 +540,23 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+function appendHeartbeatSessionResetHint(prompt: string, lastSessionResetAt?: number): string {
+  if (typeof lastSessionResetAt !== "number" || !Number.isFinite(lastSessionResetAt)) {
+    return prompt;
+  }
+  const resetIso = new Date(lastSessionResetAt).toISOString();
+  const hint =
+    "Session reset notice: " +
+    `the main session was reset at ${resetIso}. ` +
+    `Any heartbeat breaker or "wait until next session reset" notes recorded before ${resetIso} are cleared. ` +
+    `Ignore older memory entries that only describe pre-reset failures. ` +
+    `Only report that heartbeat is still in breaker mode if you observed new heartbeat/API failures after ${resetIso}.`;
+  if (prompt.includes(hint)) {
+    return prompt;
+  }
+  return `${prompt}\n${hint}`;
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -511,7 +582,10 @@ function resolveHeartbeatRunPrompt(params: {
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  const prompt = appendHeartbeatSessionResetHint(
+    appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir),
+    params.preflight.session.entry?.lastSessionResetAt,
+  );
 
   return { prompt, hasExecCompletion, hasCronEvents };
 }
@@ -713,8 +787,29 @@ export async function runHeartbeatOnce(opts: {
           bootstrapContextMode,
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
-    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
-    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    let retryBody = ctx.Body;
+    let replyResult = await getReplyFromConfig(buildHeartbeatReplyContext(ctx, retryBody), replyOpts, cfg);
+    let replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    for (const [attemptIndex, followupPrompt] of HEARTBEAT_INTERIM_FOLLOWUP_PROMPTS.entries()) {
+      if (!shouldRetryInterimHeartbeatReply({ payload: replyPayload, responsePrefix })) {
+        break;
+      }
+      retryBody = [retryBody, "", followupPrompt].join("\n\n");
+      log.info("heartbeat: retrying interim reply", {
+        agentId,
+        sessionKey,
+        attempt: attemptIndex + 1,
+      });
+      const followupCtx = buildHeartbeatReplyContext(ctx, retryBody);
+      replyResult = await getReplyFromConfig(followupCtx, replyOpts, cfg);
+      replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    }
+    if (shouldRetryInterimHeartbeatReply({ payload: replyPayload, responsePrefix })) {
+      log.warn("heartbeat: exhausted interim reply retries", {
+        agentId,
+        sessionKey,
+      });
+    }
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
@@ -789,12 +884,15 @@ export async function runHeartbeatOnce(opts: {
       typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
     const prevHeartbeatAt =
       typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+    const lastSessionResetAt =
+      typeof entry?.lastSessionResetAt === "number" ? entry.lastSessionResetAt : undefined;
     const isDuplicateMain =
       !shouldSkipMain &&
       !mediaUrls.length &&
       Boolean(prevHeartbeatText.trim()) &&
       normalized.text.trim() === prevHeartbeatText.trim() &&
       typeof prevHeartbeatAt === "number" &&
+      (typeof lastSessionResetAt !== "number" || prevHeartbeatAt >= lastSessionResetAt) &&
       startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
     if (isDuplicateMain) {

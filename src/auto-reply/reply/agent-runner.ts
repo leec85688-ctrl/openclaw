@@ -272,10 +272,14 @@ export async function runReplyAgent(params: {
     }
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = generateSecureUuid();
+    const resetAt = Date.now();
     const nextEntry: SessionEntry = {
       ...prevEntry,
       sessionId: nextSessionId,
-      updatedAt: Date.now(),
+      updatedAt: resetAt,
+      lastSessionResetAt: resetAt,
+      lastHeartbeatText: undefined,
+      lastHeartbeatSentAt: undefined,
       systemSent: false,
       abortedLastRun: false,
       modelProvider: undefined,

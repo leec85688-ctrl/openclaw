@@ -424,6 +424,22 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
+
+  it("coerces user profile to the managed browser for tabs checks", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "tabs", profile: "user" });
+
+    expect(browserClientMocks.browserTabs).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser tool url alias support", () => {

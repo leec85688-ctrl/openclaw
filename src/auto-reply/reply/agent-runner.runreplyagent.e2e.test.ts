@@ -37,6 +37,8 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
+  compactEmbeddedPiSessionDirectMock: vi.fn(),
+  useCompactEmbeddedPiSessionDirectMock: false,
 }));
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -75,6 +77,18 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("../../agents/pi-embedded-runner/compact.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/pi-embedded-runner/compact.runtime.js")>();
+  return {
+    compactEmbeddedPiSessionDirect: (params: unknown) =>
+      state.useCompactEmbeddedPiSessionDirectMock
+        ? state.compactEmbeddedPiSessionDirectMock(params)
+        : actual.compactEmbeddedPiSessionDirect(
+            params as Parameters<typeof actual.compactEmbeddedPiSessionDirect>[0],
+          ),
+  };
+});
+
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
@@ -94,6 +108,8 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
+  state.compactEmbeddedPiSessionDirectMock.mockReset();
+  state.useCompactEmbeddedPiSessionDirectMock = false;
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -1825,7 +1841,7 @@ describe("runReplyAgent memory flush", () => {
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
-      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBeUndefined();
     });
   });
 
@@ -1919,6 +1935,16 @@ describe("runReplyAgent memory flush", () => {
           meta: { agentMeta: { usage: { input: 1, output: 1 } } },
         };
       });
+      state.useCompactEmbeddedPiSessionDirectMock = true;
+      state.compactEmbeddedPiSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          tokensBefore: 3_000,
+          tokensAfter: 512,
+        },
+      });
 
       const baseRun = createBaseRun({
         storePath,
@@ -1948,6 +1974,84 @@ describe("runReplyAgent memory flush", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
       expect(calls[1]?.prompt).toBe("hello");
+      expect(state.compactEmbeddedPiSessionDirectMock).toHaveBeenCalledOnce();
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].compactionCount).toBe(2);
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+    });
+  });
+
+  it("retries forced memory flush when a stale flush marker blocks the current cycle", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "oversized-stale-flush.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "x".repeat(3_000), "utf-8");
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+      state.useCompactEmbeddedPiSessionDirectMock = true;
+      state.compactEmbeddedPiSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: false,
+        reason: "nothing to compact",
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: {
+                  forceFlushTranscriptBytes: 256,
+                },
+              },
+            },
+          },
+        },
+        runOverrides: { sessionFile },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[1]?.prompt).toBe("hello");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBeUndefined();
     });
   });
 

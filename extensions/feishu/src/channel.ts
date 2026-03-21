@@ -103,6 +103,24 @@ function describeFeishuMessageTool({
   };
 }
 
+function cardContainsManualImageElement(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => cardContainsManualImageElement(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const tag = typeof record.tag === "string" ? record.tag.trim().toLowerCase() : "";
+  if (tag === "img" || tag === "image" || tag === "gallery") {
+    return true;
+  }
+  if (typeof record.img_key === "string" || typeof record.image_key === "string") {
+    return true;
+  }
+  return Object.values(record).some((entry) => cardContainsManualImageElement(entry));
+}
+
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
   accountId: string,
@@ -380,6 +398,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     messageToolHints: () => [
       "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
       "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
+      "- For screenshots, images, and files, use `media` / `path` / `filePath` with optional `caption`; do not hand-build Feishu `card` image blocks such as `tag: \"img\"` or `img_key`.",
       "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
     ],
   },
@@ -475,33 +494,60 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           ctx.params.card && typeof ctx.params.card === "object"
             ? (ctx.params.card as Record<string, unknown>)
             : undefined;
-        const text = readFirstString(ctx.params, ["text", "message"]);
-        if (!card && !text) {
-          throw new Error(`Feishu ${ctx.action} requires text/message or card.`);
+        const text = readFirstString(ctx.params, ["text", "message", "caption"]);
+        const mediaUrl = readFirstString(ctx.params, ["media", "path", "filePath"]);
+        if (card && !mediaUrl && cardContainsManualImageElement(card)) {
+          throw new Error(
+            "Feishu screenshots/images/files must be sent with media/path/filePath (optionally caption), not a card img/img_key block.",
+          );
+        }
+        if (!card && !text && !mediaUrl) {
+          throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
         }
         const runtime = await loadFeishuChannelRuntime();
-        const result = card
+        const replyInThread = ctx.action === "thread-reply";
+        const contentResult = card
           ? await runtime.sendCardFeishu({
               cfg: ctx.cfg,
               to,
               card,
               accountId: ctx.accountId ?? undefined,
               replyToMessageId,
-              replyInThread: ctx.action === "thread-reply",
+              replyInThread,
             })
-          : await runtime.sendMessageFeishu({
+          : text
+            ? await runtime.sendMessageFeishu({
+                cfg: ctx.cfg,
+                to,
+                text,
+                accountId: ctx.accountId ?? undefined,
+                replyToMessageId,
+                replyInThread,
+              })
+            : null;
+        const mediaResult = mediaUrl
+          ? await runtime.sendMediaFeishu({
               cfg: ctx.cfg,
               to,
-              text: text!,
+              mediaUrl,
               accountId: ctx.accountId ?? undefined,
               replyToMessageId,
-              replyInThread: ctx.action === "thread-reply",
-            });
+              replyInThread,
+              mediaLocalRoots: ctx.mediaLocalRoots,
+            })
+          : null;
+        const primaryResult = mediaResult ?? contentResult;
         return jsonActionResult({
           ok: true,
           channel: "feishu",
           action: ctx.action,
-          ...result,
+          ...(primaryResult ?? {}),
+          ...(contentResult && mediaResult
+            ? {
+                contentMessageId: contentResult.messageId,
+                mediaMessageId: mediaResult.messageId,
+              }
+            : {}),
         });
       }
 

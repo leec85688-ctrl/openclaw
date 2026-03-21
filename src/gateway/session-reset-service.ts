@@ -309,6 +309,7 @@ export async function performGatewaySessionReset(params: {
     const nextEntry: SessionEntry = {
       sessionId: randomUUID(),
       updatedAt: now,
+      lastSessionResetAt: now,
       systemSent: false,
       abortedLastRun: false,
       thinkingLevel: currentEntry?.thinkingLevel,

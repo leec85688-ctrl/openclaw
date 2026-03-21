@@ -90,4 +90,27 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
   });
+
+  it("retries once when a Chinese heartbeat status only reports pending work", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [
+          {
+            text: "\u4eca\u65e5\u62db\u6807\u65e5\u62a5\u4ecd\u672a\u751f\u6210\uff1bbrowser \u5df2\u6062\u590d\u53ef\u7528\uff0c\u7cfb\u7edf\u5176\u4f59\u6b63\u5e38\uff0c\u9700\u7ee7\u7eed\u6267\u884c\u62db\u6807\u76d1\u63a7\u3002",
+          },
+        ],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "\u5df2\u8865\u8dd1\u4eca\u65e5\u62db\u6807\u76d1\u63a7\u5e76\u751f\u6210\u65e5\u62a5\u3002" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(2, 2);
+    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
+      "previous response was only an acknowledgement",
+    );
+  });
 });

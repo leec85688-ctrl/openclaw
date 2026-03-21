@@ -25,6 +25,7 @@ import {
   sendCardFeishu as sendCardFeishuImpl,
   sendMessageFeishu as sendMessageFeishuImpl,
 } from "./send.js";
+import { sendMediaFeishu as sendMediaFeishuImpl } from "./media.js";
 
 export const feishuChannelRuntime = {
   listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveImpl,
@@ -43,5 +44,6 @@ export const feishuChannelRuntime = {
   editMessageFeishu: editMessageFeishuImpl,
   getMessageFeishu: getMessageFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
+  sendMediaFeishu: sendMediaFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
 };

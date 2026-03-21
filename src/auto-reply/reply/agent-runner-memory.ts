@@ -5,6 +5,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { compactEmbeddedPiSessionDirect } from "../../agents/pi-embedded-runner/compact.runtime.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
@@ -350,6 +351,13 @@ export async function runMemoryFlushIfNeeded(params: {
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+  const hasAlreadyFlushedThisCycle = entry ? hasAlreadyFlushedForCurrentCompaction(entry) : false;
+  const shouldRetryForcedFlushAfterStaleSuppression = Boolean(
+    shouldForceFlushByTranscriptSize &&
+      entry &&
+      hasAlreadyFlushedThisCycle &&
+      entry.totalTokensFresh === false,
+  );
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
@@ -424,7 +432,8 @@ export async function runMemoryFlushIfNeeded(params: {
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
       `projectedTokenCount=${projectedTokenCount ?? "undefined"} transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
-      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
+      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize} ` +
+      `forcedFlushStaleSuppressionRetry=${shouldRetryForcedFlushAfterStaleSuppression}`,
   );
 
   const shouldFlushMemory =
@@ -441,7 +450,7 @@ export async function runMemoryFlushIfNeeded(params: {
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry));
+      (!hasAlreadyFlushedThisCycle || shouldRetryForcedFlushAfterStaleSuppression));
 
   if (!shouldFlushMemory) {
     return entry ?? params.sessionEntry;
@@ -465,6 +474,7 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  let proactiveCompactionCount: number | undefined;
   const memoryFlushNowMs = Date.now();
   const memoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
     cfg: params.cfg,
@@ -521,10 +531,6 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    let memoryFlushCompactionCount =
-      activeSessionEntry?.compactionCount ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
-      0;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -533,7 +539,64 @@ export async function runMemoryFlushIfNeeded(params: {
         storePath: params.storePath,
       });
       if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
+        proactiveCompactionCount = nextCount;
+      }
+    } else if (shouldForceFlushByTranscriptSize) {
+      const sessionId =
+        activeSessionEntry?.sessionId?.trim() || params.followupRun.run.sessionId?.trim();
+      const sessionFile =
+        sessionId && activeSessionEntry
+          ? resolveSessionFilePath(
+              sessionId,
+              activeSessionEntry,
+              resolveSessionFilePathOptions({
+                agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+                storePath: params.storePath,
+              }),
+            )
+          : params.followupRun.run.sessionFile;
+      const workspaceDir = params.followupRun.run.workspaceDir?.trim();
+
+      if (sessionId && sessionFile && workspaceDir) {
+        try {
+          const compactResult = await compactEmbeddedPiSessionDirect({
+            sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile,
+            workspaceDir,
+            config: params.cfg,
+            skillsSnapshot: params.followupRun.run.skillsSnapshot,
+            provider: params.followupRun.run.provider,
+            model: params.followupRun.run.model ?? params.defaultModel,
+            thinkLevel: params.followupRun.run.thinkLevel,
+            reasoningLevel: params.followupRun.run.reasoningLevel,
+            bashElevated: params.followupRun.run.bashElevated,
+            extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+            allowGatewaySubagentBinding: true,
+            trigger: "manual",
+            customInstructions:
+              "This session transcript exceeded the forced pre-compaction byte threshold after the memory flush. Compact the session now before the next reply turn.",
+          });
+          if (compactResult.ok && compactResult.compacted) {
+            const nextCount = await incrementCompactionCount({
+              sessionEntry: activeSessionEntry,
+              sessionStore: activeSessionStore,
+              sessionKey: params.sessionKey,
+              storePath: params.storePath,
+              tokensAfter: compactResult.result?.tokensAfter,
+            });
+            if (typeof nextCount === "number") {
+              proactiveCompactionCount = nextCount;
+              memoryCompactionCompleted = true;
+            }
+          } else {
+            logVerbose(
+              `memory flush direct compaction skipped: ${compactResult.reason ?? "nothing to compact"}`,
+            );
+          }
+        } catch (err) {
+          logVerbose(`memory flush direct compaction failed: ${String(err)}`);
+        }
       }
     }
     if (params.storePath && params.sessionKey) {
@@ -543,7 +606,9 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: Date.now(),
-            memoryFlushCompactionCount,
+            memoryFlushCompactionCount: memoryCompactionCompleted
+              ? proactiveCompactionCount
+              : undefined,
           }),
         });
         if (updatedEntry) {

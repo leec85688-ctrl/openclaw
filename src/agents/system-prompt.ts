@@ -140,7 +140,9 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `to` and `message`.",
+          "- For `action=send`, use `target` for the destination. Include `message` for text sends.",
+          "- For image/file sends, prefer `media` (or `path`/`filePath`) and optional `caption`; do not put a local file path into `message`.",
+          "- If you just created a local screenshot/image/file for the user, your next step is normally `message(action=send, media=<path>, caption=<optional>)`; do not switch into debugging unless that send call fails in the current session.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled

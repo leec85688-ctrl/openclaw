@@ -185,6 +185,7 @@ const hoisted = vi.hoisted(() => ({
   testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
   getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  loadWebMediaMock: vi.fn(),
 }));
 
 const pluginRegistryState = {
@@ -579,6 +580,8 @@ vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+  loadWebMedia: (...args: unknown[]) =>
+    (hoisted.loadWebMediaMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("../channels/web/index.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/web/index.js")>(

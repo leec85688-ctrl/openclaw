@@ -73,6 +73,12 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /**
+   * Timestamp (ms) when this session entry was last explicitly reset.
+   * Heartbeat uses this to ignore stale "wait until next session reset"
+   * state that was recorded before the current session began.
+   */
+  lastSessionResetAt?: number;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

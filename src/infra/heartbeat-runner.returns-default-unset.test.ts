@@ -932,6 +932,64 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("does not treat pre-reset heartbeat payloads as duplicates and tells the model reset cleared breaker state", async () => {
+    const tmpDir = await createCaseDir("hb-reset-clears-breaker");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const resetAt = 30_000;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            lastHeartbeatText: "仍在熔断中，已按规则停止重试，等待下次 session reset。",
+            lastHeartbeatSentAt: 0,
+            lastSessionResetAt: resetAt,
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "仍在熔断中，已按规则停止重试，等待下次 session reset。" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, 60_000),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      expect(calledCtx.Body).toContain(new Date(resetAt).toISOString());
+      expect(calledCtx.Body).toContain("Ignore older memory entries that only describe pre-reset failures.");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("handles reasoning payload delivery variants", async () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {

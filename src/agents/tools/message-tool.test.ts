@@ -3,6 +3,7 @@ import type { ChannelMessageCapability } from "../../channels/plugins/message-ca
 import {
   createDiscordMessageToolComponentsSchema,
   createMessageToolButtonsSchema,
+  createMessageToolCardSchema,
   createSlackMessageToolBlocksSchema,
   createTelegramPollExtraToolSchemas,
 } from "../../channels/plugins/message-tool-schema.js";
@@ -72,6 +73,10 @@ function getToolProperties(tool: ReturnType<CreateMessageTool>) {
 
 function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+}
+
+function getRequiredFields(tool: ReturnType<CreateMessageTool>) {
+  return (tool.parameters as { required?: string[] }).required ?? [];
 }
 
 beforeEach(async () => {
@@ -285,6 +290,19 @@ describe("message tool schema scoping", () => {
     }),
   });
 
+  const feishuPlugin = createChannelPlugin({
+    id: "feishu",
+    label: "Feishu",
+    docsPath: "/channels/feishu",
+    blurb: "Feishu test plugin.",
+    actions: ["send", "thread-reply"],
+    toolSchema: () => ({
+      properties: {
+        card: createMessageToolCardSchema(),
+      },
+    }),
+  });
+
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
   });
@@ -397,6 +415,22 @@ describe("message tool schema scoping", () => {
     const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("poll");
+  });
+
+  it("keeps plugin-contributed schema fields optional", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "feishu",
+    });
+    const properties = getToolProperties(tool);
+    const required = getRequiredFields(tool);
+
+    expect(properties.card).toBeDefined();
+    expect(required).not.toContain("card");
   });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {

@@ -345,6 +345,9 @@ function buildMessageToolSchemaProps(options: {
   includeInteractive: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
+  const optionalExtraProperties = Object.fromEntries(
+    Object.entries(options.extraProperties ?? {}).map(([key, schema]) => [key, Type.Optional(schema)]),
+  );
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
@@ -359,7 +362,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
     ...buildPresenceSchema(),
-    ...options.extraProperties,
+    ...optionalExtraProperties,
   };
 }
 
