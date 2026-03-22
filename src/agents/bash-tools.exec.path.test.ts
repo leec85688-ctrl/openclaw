@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +169,39 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  it("blocks quitting protected control-plane apps", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-protected-quit", {
+        command: `osascript -e 'tell application "Tailscale" to quit'`,
+      }),
+    ).rejects.toThrow(/refusing to quit or kill protected app 'Tailscale'/);
+  });
+
+  it("blocks pkill against protected control-plane apps", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-protected-pkill", {
+        command: "pkill -f Tailscale",
+      }),
+    ).rejects.toThrow(/refusing to quit or kill protected app 'Tailscale'/);
+  });
+
+  it("allows non-terminating commands to continue", async () => {
+    if (isWin) {
+      return;
+    }
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    const result = await tool.execute("call-safe-command", {
+      command: "printf 'ok'",
+    });
+    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(text).toContain("ok");
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
@@ -234,3 +267,4 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/sandbox runtime is unavailable/);
   });
 });
+

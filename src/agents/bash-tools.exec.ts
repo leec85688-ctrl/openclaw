@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
@@ -51,6 +51,45 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+const PROTECTED_APP_TERMINATION_TARGETS = [
+  "Tailscale",
+  "tailscaled",
+  "OpenClaw",
+  "ai.openclaw.gateway",
+  "ai.openclaw.node",
+] as const;
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function detectProtectedAppTermination(command: string): string | null {
+  const normalized = command.normalize("NFKC");
+  for (const target of PROTECTED_APP_TERMINATION_TARGETS) {
+    const escaped = escapeRegex(target);
+    const osascriptQuit = new RegExp(
+      String.raw`tell\s+application\s+["']?${escaped}["']?\s+to\s+quit\b`,
+      "i",
+    );
+    const killallTarget = new RegExp(
+      String.raw`(?:^|[\n;&|])\s*killall\s+(?:-[^\s]+\s+)*["']?${escaped}["']?\b`,
+      "i",
+    );
+    const pkillTarget = new RegExp(
+      String.raw`(?:^|[\n;&|])\s*pkill\b[^\n;&|]*\b${escaped}\b`,
+      "i",
+    );
+    if (
+      osascriptQuit.test(normalized) ||
+      killallTarget.test(normalized) ||
+      pkillTarget.test(normalized)
+    ) {
+      return target;
+    }
+  }
+  return null;
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -224,6 +263,13 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+      const protectedTarget = detectProtectedAppTermination(params.command);
+      if (protectedTarget) {
+        throw new Error(
+          `exec blocked: refusing to quit or kill protected app '${protectedTarget}'. ` +
+            "Dismiss the popup/window instead of terminating the control-plane app.",
+        );
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -597,3 +643,4 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
+
