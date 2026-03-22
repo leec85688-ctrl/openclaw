@@ -1262,6 +1262,10 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now() - 60_000,
           lastHeartbeatText: "仍在熔断中，已按规则停止重试，等待下次 session reset。",
           lastHeartbeatSentAt: Date.now() - 120_000,
+          skillsSnapshot: {
+            prompt: "OLD",
+            skills: [{ name: "task-router" }],
+          },
         },
       },
     });
@@ -1271,14 +1275,10 @@ describe("gateway server sessions", () => {
       ok: true;
       key: string;
       entry: Record<string, unknown>;
-    }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "main",
-        reason: "reset",
-      },
-    );
+    }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "reset",
+    });
     expect(reset.ok).toBe(true);
     if (!reset.ok) {
       throw new Error("expected reset to succeed");
@@ -1286,6 +1286,7 @@ describe("gateway server sessions", () => {
     expect(typeof reset.payload?.entry.lastSessionResetAt).toBe("number");
     expect(reset.payload?.entry.lastHeartbeatText).toBeUndefined();
     expect(reset.payload?.entry.lastHeartbeatSentAt).toBeUndefined();
+    expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
     ws.close();
   });
 
