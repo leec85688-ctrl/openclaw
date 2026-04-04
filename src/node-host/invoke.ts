@@ -73,6 +73,11 @@ export type NodeInvokeRequestPayload = {
   idempotencyKey?: string | null;
 };
 
+export type NodeInvokeCancelPayload = {
+  id: string;
+  nodeId: string;
+};
+
 export type { SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
@@ -194,6 +199,7 @@ async function runCommand(
   cwd: string | undefined,
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
+  abortSignal?: AbortSignal,
 ): Promise<RunResult> {
   return await new Promise((resolve) => {
     const stdoutChunks: Buffer[] = [];
@@ -201,8 +207,22 @@ async function runCommand(
     let outputLen = 0;
     let truncated = false;
     let timedOut = false;
+    let aborted = abortSignal?.aborted === true;
     let settled = false;
     const windowsEncoding = resolveWindowsConsoleEncoding();
+
+    if (aborted) {
+      resolve({
+        timedOut: false,
+        aborted: true,
+        success: false,
+        stdout: "",
+        stderr: "",
+        error: "aborted",
+        truncated: false,
+      });
+      return;
+    }
 
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
@@ -233,6 +253,15 @@ async function runCommand(
     child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
 
     let timer: NodeJS.Timeout | undefined;
+    const abortListener = () => {
+      aborted = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    };
+    abortSignal?.addEventListener("abort", abortListener, { once: true });
     if (timeoutMs && timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
@@ -252,6 +281,7 @@ async function runCommand(
       if (timer) {
         clearTimeout(timer);
       }
+      abortSignal?.removeEventListener("abort", abortListener);
       const stdout = decodeCapturedOutputBuffer({
         buffer: Buffer.concat(stdoutChunks),
         windowsEncoding,
@@ -263,10 +293,11 @@ async function runCommand(
       resolve({
         exitCode,
         timedOut,
-        success: exitCode === 0 && !timedOut && !error,
+        aborted,
+        success: exitCode === 0 && !timedOut && !error && !aborted,
         stdout,
         stderr,
-        error: error ?? null,
+        error: aborted ? "aborted" : error ?? null,
         truncated,
       });
     };
@@ -348,6 +379,7 @@ async function sendExecFinishedEvent(
     "exec.finished",
     buildExecEventPayload({
       sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       runId: params.runId,
       host: "node",
       command: params.commandText,
@@ -418,6 +450,7 @@ export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
   skillBins: SkillBinsProvider,
+  abortSignal?: AbortSignal,
 ) {
   const command = String(frame.command ?? "");
   if (command === "system.execApprovals.get") {
@@ -533,6 +566,7 @@ export async function handleInvoke(
 
   await handleSystemRunInvoke({
     client,
+    abortSignal,
     params,
     skillBins,
     execHostEnforced,
@@ -549,7 +583,14 @@ export async function handleInvoke(
       await sendInvokeResult(client, frame, result);
     },
     sendExecFinishedEvent: async ({ sessionKey, runId, commandText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, commandText, result });
+      await sendExecFinishedEvent({
+        client,
+        sessionKey,
+        sessionId: params.sessionId,
+        runId,
+        commandText,
+        result,
+      });
     },
     preferMacAppExecHost,
   });
@@ -589,6 +630,19 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
     timeoutMs,
     idempotencyKey,
   };
+}
+
+export function coerceNodeInvokeCancelPayload(payload: unknown): NodeInvokeCancelPayload | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  const id = typeof obj.id === "string" ? obj.id.trim() : "";
+  const nodeId = typeof obj.nodeId === "string" ? obj.nodeId.trim() : "";
+  if (!id || !nodeId) {
+    return null;
+  }
+  return { id, nodeId };
 }
 
 async function sendInvokeResult(

@@ -35,12 +35,14 @@ git commit -m "Add agent workspace"
 ## Daily memory (recommended)
 
 - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).
-- On session start, read today + yesterday if present.
+- In the main session, read today + yesterday if present.
+- In subagent/worker sessions, stay task-local unless the task explicitly needs broader dev history.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
 ## Heartbeats (optional)
 
 - HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.
+- This is mainly for the primary dev assistant session, not transient subagents/workers.
 
 ## Customize
 

@@ -35,11 +35,15 @@ const subagentRegistryMocks = vi.hoisted(() => ({
   listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
     () => [],
   ),
+  listSubagentRunsForController: vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(
+    () => [],
+  ),
   markSubagentRunTerminated: vi.fn(() => 1),
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForController,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -165,6 +169,7 @@ describe("abort detection", () => {
     resetAbortMemoryForTest();
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
+    subagentRegistryMocks.listSubagentRunsForController.mockReset().mockReturnValue([]);
   });
 
   it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
@@ -529,7 +534,7 @@ describe("abort detection", () => {
       },
     });
 
-    subagentRegistryMocks.listSubagentRunsForRequester.mockReturnValueOnce([
+    subagentRegistryMocks.listSubagentRunsForController.mockReturnValueOnce([
       {
         runId: "run-1",
         childSessionKey: childKey,
@@ -570,7 +575,7 @@ describe("abort detection", () => {
     // First call: main session lists depth-1 children
     // Second call (cascade): depth-1 session lists depth-2 children
     // Third call (cascade from depth-2): no further children
-    subagentRegistryMocks.listSubagentRunsForRequester
+    subagentRegistryMocks.listSubagentRunsForController
       .mockReturnValueOnce([
         {
           runId: "run-1",
@@ -609,7 +614,7 @@ describe("abort detection", () => {
   });
 
   it("cascade stop traverses ended depth-1 parents to stop active depth-2 children", async () => {
-    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
+    subagentRegistryMocks.listSubagentRunsForController.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-ended";
@@ -627,7 +632,7 @@ describe("abort detection", () => {
     // main -> ended depth-1 parent
     // depth-1 parent -> active depth-2 child
     // depth-2 child -> none
-    subagentRegistryMocks.listSubagentRunsForRequester
+    subagentRegistryMocks.listSubagentRunsForController
       .mockReturnValueOnce([
         {
           runId: "run-1",

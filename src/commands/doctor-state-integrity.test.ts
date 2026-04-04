@@ -161,6 +161,37 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it("detects orphan transcripts in non-default agent session dirs", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    };
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const opsSessionsDir = resolveSessionTranscriptsDirForAgent("ops", process.env, () => tempHome);
+    const opsStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    fs.mkdirSync(opsSessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(opsStorePath), { recursive: true });
+    fs.writeFileSync(opsStorePath, JSON.stringify({}, null, 2));
+    fs.writeFileSync(path.join(opsSessionsDir, "ops-orphan.jsonl"), '{"type":"session"}\n');
+
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+
+    expect(stateIntegrityText()).toContain(
+      "Found 1 orphan transcript file across 1 agent session dir",
+    );
+    expect(stateIntegrityText()).toContain("ops: 1 orphan transcript file");
+    expect(stateIntegrityText()).toContain("ops-orphan.jsonl");
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "Archive 1 orphan transcript file across 1 agent session dir?",
+        ),
+      }),
+    );
+  });
+
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

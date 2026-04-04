@@ -1429,6 +1429,7 @@ export function markSubagentRunTerminated(params: {
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,

@@ -242,6 +242,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
+      {
+        const context = buildRequestContext();
+        context.nodeRegistry.cancelByRequesterConnId(connId, {
+          code: "CANCELED",
+          message: "node invoke canceled: requester disconnected",
+        });
+      }
       if (client?.connect?.role === "node") {
         const context = buildRequestContext();
         const nodeId = context.nodeRegistry.unregister(connId);

@@ -32,6 +32,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import { archiveSessionTranscripts } from "../gateway/session-utils.fs.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { isLikelyInterimCronMessage } from "../cron/isolated-agent/subagent-followup.js";
@@ -476,7 +477,26 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const currentSessionId =
+    typeof session.entry?.sessionId === "string" ? session.entry.sessionId.trim() : "";
+  const lastSessionResetAt =
+    typeof session.entry?.lastSessionResetAt === "number" && Number.isFinite(session.entry.lastSessionResetAt)
+      ? session.entry.lastSessionResetAt
+      : undefined;
+  const pendingEventEntries = peekSystemEventEntries(session.sessionKey).filter((event) => {
+    if (
+      typeof lastSessionResetAt === "number" &&
+      Number.isFinite(event.ts) &&
+      event.ts < lastSessionResetAt
+    ) {
+      return false;
+    }
+    const eventSessionId = typeof event.sessionId === "string" ? event.sessionId.trim() : "";
+    if (currentSessionId && eventSessionId && eventSessionId !== currentSessionId) {
+      return false;
+    }
+    return true;
+  });
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -568,6 +588,7 @@ function resolveHeartbeatRunPrompt(params: {
   const pendingEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries.map((event) => event.text)
     : [];
+  const execEvents = pendingEvents.filter(isExecCompletionEvent);
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
@@ -575,10 +596,10 @@ function resolveHeartbeatRunPrompt(params: {
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
-  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const hasExecCompletion = execEvents.length > 0;
   const hasCronEvents = cronEvents.length > 0;
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
@@ -664,6 +685,15 @@ export async function runHeartbeatOnce(opts: {
     });
     cronSession.store[isolatedKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
+    if (cronSession.previousSessionEntry?.sessionId) {
+      archiveSessionTranscripts({
+        sessionId: cronSession.previousSessionEntry.sessionId,
+        storePath: cronSession.storePath,
+        sessionFile: cronSession.previousSessionEntry.sessionFile,
+        agentId,
+        reason: "reset",
+      });
+    }
     runSessionKey = isolatedKey;
     runStorePath = cronSession.storePath;
   }

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
@@ -63,13 +64,14 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "./bootstrap-cache.js";
 import { resolveBootstrapWarningSignaturesSeen } from "./bootstrap-budget.js";
 import { runCliAgent } from "./cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "./cli-session.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
-import { resolveSession } from "./command/session.js";
+import { hasSessionWorkspaceDrift, resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover-error.js";
@@ -171,8 +173,15 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  sessionAgentId: string;
+}): string {
   if (!params.isFallbackRetry) {
+    return params.body;
+  }
+  if (normalizeAgentId(params.sessionAgentId) === "wechat") {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -380,6 +389,7 @@ function runAgentAttempt(params: {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    sessionAgentId: params.sessionAgentId,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -642,14 +652,14 @@ async function prepareAgentCommandExecution(
   });
 
   const {
-    sessionId,
+    sessionId: resolvedSessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
+    isNewSession: resolvedIsNewSession,
+    persistedThinking: resolvedPersistedThinking,
+    persistedVerbose: resolvedPersistedVerbose,
   } = sessionResolution;
   const sessionAgentId =
     agentIdOverride ??
@@ -665,6 +675,32 @@ async function prepareAgentCommandExecution(
   // Internal callers (for example subagent spawns) may pin workspace inheritance.
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const forceFreshSessionForWorkspace =
+    !resolvedIsNewSession &&
+    hasSessionWorkspaceDrift({
+      sessionEntry: sessionEntryRaw,
+      workspaceDir: workspaceDirRaw,
+    });
+  if (forceFreshSessionForWorkspace) {
+    clearBootstrapSnapshotOnSessionRollover({
+      sessionKey,
+      previousSessionId: sessionEntryRaw?.sessionId,
+    });
+    log.info("forcing fresh session due to workspace drift", {
+      sessionKey,
+      previousSessionId: sessionEntryRaw?.sessionId,
+      previousWorkspaceDir: sessionEntryRaw?.systemPromptReport?.workspaceDir,
+      nextWorkspaceDir: workspaceDirRaw,
+    });
+  }
+  const sessionId = forceFreshSessionForWorkspace ? crypto.randomUUID() : resolvedSessionId;
+  const isNewSession = forceFreshSessionForWorkspace || resolvedIsNewSession;
+  const persistedThinking = forceFreshSessionForWorkspace
+    ? undefined
+    : resolvedPersistedThinking;
+  const persistedVerbose = forceFreshSessionForWorkspace
+    ? undefined
+    : resolvedPersistedVerbose;
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,

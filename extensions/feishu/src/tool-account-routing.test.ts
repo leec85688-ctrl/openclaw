@@ -18,11 +18,13 @@ function createConfig(params: {
   toolsA?: {
     wiki?: boolean;
     drive?: boolean;
+    bitable?: boolean;
     perm?: boolean;
   };
   toolsB?: {
     wiki?: boolean;
     drive?: boolean;
+    bitable?: boolean;
     perm?: boolean;
   };
   defaultAccount?: string;
@@ -125,5 +127,18 @@ describe("feishu tool account routing", () => {
 
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+  });
+
+  test("bitable tool does not register when disabled in all accounts", () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { bitable: false },
+        toolsB: { bitable: false },
+      }),
+    );
+
+    registerFeishuBitableTools(api);
+
+    expect(() => resolveTool("feishu_bitable_get_meta")).toThrow();
   });
 });

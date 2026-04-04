@@ -507,7 +507,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    userTimezone && availableTools.has("session_status")
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",

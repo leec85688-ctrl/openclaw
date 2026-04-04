@@ -23,6 +23,7 @@ export type NodeSession = {
 type PendingInvoke = {
   nodeId: string;
   command: string;
+  requesterConnId?: string;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -34,6 +35,33 @@ export type NodeInvokeResult = {
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
 };
+
+function normalizeInvokeTimeoutMs(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(1, Math.min(Math.floor(value), 2_147_483_647));
+}
+
+function resolveInvokeTimeoutMs(params: {
+  command: string;
+  timeoutMs?: number;
+  params?: unknown;
+}): number {
+  const explicitTimeoutMs = normalizeInvokeTimeoutMs(params.timeoutMs);
+  if (explicitTimeoutMs !== null) {
+    return explicitTimeoutMs;
+  }
+  if (params.command === "system.run" && params.params && typeof params.params === "object") {
+    const nestedTimeoutMs = normalizeInvokeTimeoutMs(
+      (params.params as { timeoutMs?: unknown }).timeoutMs,
+    );
+    if (nestedTimeoutMs !== null) {
+      return nestedTimeoutMs;
+    }
+  }
+  return 30_000;
+}
 
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
@@ -110,6 +138,7 @@ export class NodeRegistry {
     params?: unknown;
     timeoutMs?: number;
     idempotencyKey?: string;
+    requesterConnId?: string;
   }): Promise<NodeInvokeResult> {
     const node = this.nodesById.get(params.nodeId);
     if (!node) {
@@ -135,7 +164,7 @@ export class NodeRegistry {
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs = resolveInvokeTimeoutMs(params);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -147,11 +176,30 @@ export class NodeRegistry {
       this.pendingInvokes.set(requestId, {
         nodeId: params.nodeId,
         command: params.command,
+        requesterConnId: params.requesterConnId,
         resolve,
         reject,
         timer,
       });
     });
+  }
+
+  cancelByRequesterConnId(
+    connId: string,
+    opts?: { code?: string; message?: string },
+  ): { canceled: number; requestIds: string[] } {
+    const requestIds: string[] = [];
+    for (const [requestId, pending] of this.pendingInvokes.entries()) {
+      if (pending.requesterConnId !== connId) {
+        continue;
+      }
+      requestIds.push(requestId);
+      this.cancelPendingInvoke(requestId, {
+        code: opts?.code ?? "CANCELED",
+        message: opts?.message ?? "node invoke canceled",
+      });
+    }
+    return { canceled: requestIds.length, requestIds };
   }
 
   handleInvokeResult(params: {
@@ -205,5 +253,32 @@ export class NodeRegistry {
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
     return this.sendEventInternal(node, event, payload);
+  }
+
+  private cancelPendingInvoke(
+    requestId: string,
+    params: { code: string; message: string },
+  ): boolean {
+    const pending = this.pendingInvokes.get(requestId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeout(pending.timer);
+    this.pendingInvokes.delete(requestId);
+    const node = this.nodesById.get(pending.nodeId);
+    if (node) {
+      this.sendEventToSession(node, "node.invoke.cancel", {
+        id: requestId,
+        nodeId: pending.nodeId,
+      });
+    }
+    pending.resolve({
+      ok: false,
+      error: {
+        code: params.code,
+        message: params.message,
+      },
+    });
+    return true;
   }
 }

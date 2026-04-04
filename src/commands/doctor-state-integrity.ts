@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -763,44 +763,87 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (existsDir(sessionsDir)) {
+  const orphanGroups: Array<{
+    agentId: string;
+    sessionsDir: string;
+    displaySessionsDir: string;
+    orphanTranscriptPaths: string[];
+  }> = [];
+  const orphanAgentIds = Array.from(new Set([agentId, ...listAgentIds(cfg)]));
+  for (const orphanAgentId of orphanAgentIds) {
+    const orphanSessionsDir = resolveSessionTranscriptsDirForAgent(orphanAgentId, env, homedir);
+    if (!existsDir(orphanSessionsDir)) {
+      continue;
+    }
+    const orphanStorePath = resolveStorePath(cfg.session?.store, { agentId: orphanAgentId });
+    const orphanStore = loadSessionStore(orphanStorePath);
+    const orphanEntries = Object.entries(orphanStore).filter(
+      ([, entry]) => entry && typeof entry === "object",
+    );
+    const orphanSessionPathOpts = resolveSessionFilePathOptions({
+      agentId: orphanAgentId,
+      storePath: orphanStorePath,
+    });
     const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
+    for (const [, entry] of orphanEntries) {
       if (!entry?.sessionId) {
         continue;
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          path.resolve(resolveSessionFilePath(entry.sessionId, entry, orphanSessionPathOpts)),
         );
       } catch {
         // ignore invalid legacy paths
       }
     }
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const sessionDirEntries = fs.readdirSync(orphanSessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
+      .map((entry) => path.resolve(path.join(orphanSessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
-      const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-      const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-      warnings.push(
-        [
-          `- Found ${orphanCount} in ${displaySessionsDir}.`,
-          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
-          `  Examples: ${orphanPreview}`,
-        ].join("\n"),
-      );
-      const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
-        initialValue: false,
-      });
-      if (archiveOrphans) {
-        let archived = 0;
-        const archivedAt = formatSessionArchiveTimestamp();
-        for (const orphanPath of orphanTranscriptPaths) {
+    if (orphanTranscriptPaths.length === 0) {
+      continue;
+    }
+    orphanGroups.push({
+      agentId: orphanAgentId,
+      sessionsDir: orphanSessionsDir,
+      displaySessionsDir: shortenHomePath(orphanSessionsDir),
+      orphanTranscriptPaths,
+    });
+  }
+  if (orphanGroups.length > 0) {
+    const orphanTotal = orphanGroups.reduce(
+      (sum, group) => sum + group.orphanTranscriptPaths.length,
+      0,
+    );
+    const orphanCount = countLabel(orphanTotal, "orphan transcript file");
+    const orphanPreview = formatFilePreview(
+      orphanGroups.flatMap((group) => group.orphanTranscriptPaths),
+    );
+    const dirCount = countLabel(orphanGroups.length, "agent session dir");
+    const locationLines = orphanGroups.map(
+      (group) =>
+        `  - ${group.agentId}: ${countLabel(group.orphanTranscriptPaths.length, "orphan transcript file")} in ${group.displaySessionsDir}`,
+    );
+    warnings.push(
+      [
+        `- Found ${orphanCount} across ${dirCount}.`,
+        "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
+        "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
+        ...locationLines,
+        `  Examples: ${orphanPreview}`,
+      ].join("\n"),
+    );
+    const archiveOrphans = await prompter.confirmSkipInNonInteractive({
+      message: `Archive ${orphanCount} across ${dirCount}? This only renames them to *.deleted.<timestamp>.`,
+      initialValue: false,
+    });
+    if (archiveOrphans) {
+      let archived = 0;
+      const archivedAt = formatSessionArchiveTimestamp();
+      for (const group of orphanGroups) {
+        for (const orphanPath of group.orphanTranscriptPaths) {
           const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
           try {
             fs.renameSync(orphanPath, archivedPath);
@@ -811,11 +854,11 @@ export async function noteStateIntegrity(
             );
           }
         }
-        if (archived > 0) {
-          changes.push(
-            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
-          );
-        }
+      }
+      if (archived > 0) {
+        changes.push(
+          `- Archived ${countLabel(archived, "orphan transcript file")} across ${dirCount} as .deleted timestamped backups.`,
+        );
       }
     }
   }

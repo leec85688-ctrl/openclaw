@@ -115,7 +115,7 @@ type BrowserProxyResult = {
   files?: BrowserProxyFile[];
 };
 
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 45_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserNodeTarget = {

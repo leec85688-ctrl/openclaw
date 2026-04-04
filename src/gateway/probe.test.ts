@@ -104,4 +104,37 @@ describe("probeGateway", () => {
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
   });
+
+  it("treats detail RPC failures after health as partial success", async () => {
+    const previousRequest = MockGatewayClient.prototype.request;
+    MockGatewayClient.prototype.request = async function request(method: string): Promise<unknown> {
+      gatewayClientState.requests.push(method);
+      if (method === "health") {
+        return { ok: true };
+      }
+      if (method === "status" || method === "config.get") {
+        throw new Error(`${method} timeout`);
+      }
+      if (method === "system-presence") {
+        return [];
+      }
+      return {};
+    };
+
+    try {
+      const result = await probeGateway({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 1_000,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.error).toBeNull();
+      expect(result.health).toEqual({ ok: true });
+      expect(result.status).toBeNull();
+      expect(result.presence).toEqual([]);
+      expect(result.configSnapshot).toBeNull();
+    } finally {
+      MockGatewayClient.prototype.request = previousRequest;
+    }
+  });
 });

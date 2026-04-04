@@ -1,3 +1,4 @@
+import path from "node:path";
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -39,6 +40,31 @@ type SessionKeyResolution = {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
+
+function normalizeWorkspaceDirForComparison(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return path.resolve(trimmed);
+}
+
+export function hasSessionWorkspaceDrift(params: {
+  sessionEntry?: Pick<SessionEntry, "systemPromptReport"> | null;
+  workspaceDir?: string | null;
+}): boolean {
+  const expectedWorkspaceDir = normalizeWorkspaceDirForComparison(params.workspaceDir);
+  if (!expectedWorkspaceDir) {
+    return false;
+  }
+  const previousWorkspaceDir = normalizeWorkspaceDirForComparison(
+    params.sessionEntry?.systemPromptReport?.workspaceDir,
+  );
+  if (!previousWorkspaceDir) {
+    return false;
+  }
+  return previousWorkspaceDir !== expectedWorkspaceDir;
+}
 
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;

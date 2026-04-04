@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -7,14 +6,13 @@ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -256,12 +254,10 @@ export async function runReplyAgent(params: {
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
   };
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
-    cleanupTranscripts,
   }: SessionResetOptions): Promise<boolean> => {
     if (!sessionKey || !activeSessionStore || !storePath) {
       return false;
@@ -270,7 +266,8 @@ export async function runReplyAgent(params: {
     if (!prevEntry) {
       return false;
     }
-    const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
+    const prevSessionId = prevEntry.sessionId;
+    const prevSessionFile = prevEntry.sessionFile;
     const nextSessionId = generateSecureUuid();
     const resetAt = Date.now();
     const nextEntry: SessionEntry = {
@@ -298,11 +295,13 @@ export async function runReplyAgent(params: {
     );
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
+    let persisted = true;
     try {
       await updateSessionStore(storePath, (store) => {
         store[sessionKey] = nextEntry;
       });
     } catch (err) {
+      persisted = false;
       defaultRuntime.error(
         `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
       );
@@ -312,24 +311,14 @@ export async function runReplyAgent(params: {
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
     defaultRuntime.error(buildLogMessage(nextSessionId));
-    if (cleanupTranscripts && prevSessionId) {
-      const transcriptCandidates = new Set<string>();
-      const resolved = resolveSessionFilePath(
-        prevSessionId,
-        prevEntry,
-        resolveSessionFilePathOptions({ agentId, storePath }),
-      );
-      if (resolved) {
-        transcriptCandidates.add(resolved);
-      }
-      transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
-      for (const candidate of transcriptCandidates) {
-        try {
-          fs.unlinkSync(candidate);
-        } catch {
-          // Best-effort cleanup.
-        }
-      }
+    if (persisted && prevSessionId) {
+      archiveSessionTranscripts({
+        sessionId: prevSessionId,
+        storePath,
+        sessionFile: prevSessionFile,
+        agentId,
+        reason: "reset",
+      });
     }
     return true;
   };
@@ -344,7 +333,6 @@ export async function runReplyAgent(params: {
       failureLabel: "role ordering conflict",
       buildLogMessage: (nextSessionId) =>
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-      cleanupTranscripts: true,
     });
   try {
     const runStartedAt = Date.now();

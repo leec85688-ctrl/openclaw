@@ -111,6 +111,30 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("turns fallback fetch failures into provider error snapshots instead of rejecting", async () => {
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new TypeError("fetch failed");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "openai-codex", token: "codex-token" }],
+      mockFetch,
+    );
+
+    expect(summary).toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "openai-codex",
+          displayName: "Codex",
+          windows: [],
+          error: "fetch failed",
+        },
+      ],
+    });
+  });
+
   it("throws when fetch is unavailable", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);

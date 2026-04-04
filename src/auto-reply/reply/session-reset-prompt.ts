@@ -10,11 +10,21 @@ const BARE_SESSION_RESET_PROMPT_BASE =
  * Without this, agents on /new or /reset guess the date from their training cutoff.
  */
 export function buildBareSessionResetPrompt(cfg?: OpenClawConfig, nowMs?: number): string {
-  return appendCronStyleCurrentTimeLine(
+  const resolvedNowMs = nowMs ?? Date.now();
+  const userTimezone = cfg?.agents?.defaults?.userTimezone?.trim();
+  const dateStamp = new Intl.DateTimeFormat("en-CA", {
+    ...(userTimezone ? { timeZone: userTimezone } : {}),
+  }).format(new Date(resolvedNowMs));
+  const promptWithTime = appendCronStyleCurrentTimeLine(
     BARE_SESSION_RESET_PROMPT_BASE,
     cfg ?? {},
-    nowMs ?? Date.now(),
+    resolvedNowMs,
   );
+  const dailyMemoryHint =
+    `Today in your timezone is ${dateStamp}. ` +
+    `When startup instructions mention memory/YYYY-MM-DD.md, read memory/${dateStamp}.md exactly. ` +
+    "Do not guess a different year from prior chats or model memory.";
+  return `${promptWithTime}\n${dailyMemoryHint}`;
 }
 
 /** @deprecated Use buildBareSessionResetPrompt(cfg) instead */

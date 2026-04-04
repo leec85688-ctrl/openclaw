@@ -85,6 +85,12 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+function extractDevToolsListeningWsUrl(stderrText: string): string | null {
+  const match = stderrText.match(/DevTools listening on (wss?:\/\/\S+)/i);
+  const value = match?.[1]?.trim();
+  return value || null;
+}
+
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
@@ -380,22 +386,44 @@ export async function launchOpenClawChrome(
   // The listener is removed on success to avoid unbounded memory growth
   // from a long-lived Chrome process that emits periodic warnings.
   const stderrChunks: Buffer[] = [];
+  let stderrText = "";
+  let stderrDevToolsWsUrl: string | null = null;
   const onStderr = (chunk: Buffer) => {
     stderrChunks.push(chunk);
+    const text = chunk.toString("utf8");
+    if (!text) {
+      return;
+    }
+    stderrText = `${stderrText}${text}`.slice(-CHROME_STDERR_HINT_MAX_CHARS * 2);
+    stderrDevToolsWsUrl ??= extractDevToolsListeningWsUrl(stderrText);
   };
   proc.stderr?.on("data", onStderr);
+
+  const isChromeLaunchReady = async (): Promise<boolean> => {
+    if (await isChromeReachable(profile.cdpUrl)) {
+      return true;
+    }
+    if (!stderrDevToolsWsUrl) {
+      return false;
+    }
+    return await isChromeCdpReady(
+      stderrDevToolsWsUrl,
+      CHROME_REACHABILITY_TIMEOUT_MS,
+      CHROME_WS_READY_TIMEOUT_MS,
+    ).catch(() => false);
+  };
 
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl)) {
+    if (await isChromeLaunchReady()) {
       break;
     }
     await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl))) {
-    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+  if (!(await isChromeLaunchReady())) {
+    const stderrOutput = (stderrText || Buffer.concat(stderrChunks).toString("utf8")).trim();
     const stderrHint = stderrOutput
       ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
       : "";

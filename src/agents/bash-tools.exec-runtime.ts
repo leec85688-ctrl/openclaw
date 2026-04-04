@@ -220,7 +220,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
+  enqueueSystemEvent(summary, { sessionKey, sessionId: session.requestSessionId });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
   );
@@ -276,13 +276,17 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; sessionId?: string },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
+  enqueueSystemEvent(text, {
+    sessionKey,
+    contextKey: opts.contextKey,
+    sessionId: opts.sessionId,
+  });
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
@@ -303,6 +307,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  sessionId?: string;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
@@ -320,6 +325,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    requestSessionId: opts.sessionId?.trim() || undefined,
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,

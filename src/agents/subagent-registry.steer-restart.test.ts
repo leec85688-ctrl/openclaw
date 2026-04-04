@@ -471,6 +471,11 @@ describe("subagent registry steer restarts", () => {
       runId: "run-killed",
       childSessionKey,
       task: "kill me",
+      requesterOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "user:ou_sender_1",
+      },
     });
 
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
@@ -491,7 +496,7 @@ describe("subagent registry steer restarts", () => {
         targetKind: "subagent",
         reason: "subagent-killed",
         sendFarewell: true,
-        accountId: undefined,
+        accountId: "work",
         runId: "run-killed",
         endedAt: expect.any(Number),
         outcome: "killed",

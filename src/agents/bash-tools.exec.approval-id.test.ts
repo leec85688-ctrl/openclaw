@@ -718,6 +718,109 @@ describe("exec approvals", () => {
     await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
   });
 
+  it("skips system.run.prepare for node host commands when approval is not needed", async () => {
+    const nodeInvokeCommands: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command) {
+          nodeInvokeCommands.push(invoke.command);
+        }
+        if (invoke.command === "system.run.prepare") {
+          throw new Error("prepare should not be called");
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-no-prepare", {
+      command: "/Users/kobe2026/.openclaw/workspace-wechat/scripts/wechat_window_probe.py --current-only",
+    });
+    expect(result.details.status).toBe("completed");
+    expect(nodeInvokeCommands).toContain("system.run");
+    expect(nodeInvokeCommands).not.toContain("system.run.prepare");
+  });
+
+  it("passes the computed node invoke timeout through the top-level gateway payload", async () => {
+    let observedInvoke: { timeoutMs?: number; params?: { timeoutMs?: number } } | null = null;
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as {
+          command?: string;
+          timeoutMs?: number;
+          params?: { timeoutMs?: number };
+        };
+        if (invoke.command === "system.run") {
+          observedInvoke = invoke;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      timeoutSec: 41,
+    });
+
+    const result = await tool.execute("call-timeout-propagation", {
+      command: "echo hi",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(observedInvoke).toMatchObject({
+      timeoutMs: 46_000,
+    });
+    const nestedTimeoutMs = (
+      observedInvoke as { timeoutMs?: number; params?: { timeoutMs?: number } } | null
+    )?.params?.timeoutMs;
+    expect(nestedTimeoutMs).toBeUndefined();
+  });
+
+  it("passes the tool abort signal through node.invoke gateway calls", async () => {
+    let observedAbortSignal: AbortSignal | undefined;
+    vi.mocked(callGatewayTool).mockImplementation(async (method, opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run") {
+          observedAbortSignal = opts.abortSignal;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+    const controller = new AbortController();
+
+    const result = await tool.execute(
+      "call-node-abort-propagation",
+      { command: "echo hi" },
+      controller.signal,
+    );
+
+    expect(result.details.status).toBe("completed");
+    expect(observedAbortSignal).toBe(controller.signal);
+  });
+
   it("denies gateway obfuscated command when approval request times out", async () => {
     if (process.platform === "win32") {
       return;

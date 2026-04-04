@@ -31,7 +31,7 @@ type BrowserProxyResult = {
 };
 
 const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 45_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {

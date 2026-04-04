@@ -46,6 +46,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -374,6 +375,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isFastTestEnv) {
       return;
     }
+    const previousSessionEntry = cronSession.previousSessionEntry;
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
@@ -384,6 +386,16 @@ export async function runCronIsolatedAgentTurn(params: {
         store[runSessionKey] = cronSession.sessionEntry;
       }
     });
+    if (previousSessionEntry?.sessionId) {
+      archiveSessionTranscripts({
+        sessionId: previousSessionEntry.sessionId,
+        storePath: cronSession.storePath,
+        sessionFile: previousSessionEntry.sessionFile,
+        agentId,
+        reason: "reset",
+      });
+      cronSession.previousSessionEntry = undefined;
+    }
   };
   const withRunSession = (
     result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,

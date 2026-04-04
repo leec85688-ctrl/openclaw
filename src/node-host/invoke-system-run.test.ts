@@ -434,6 +434,33 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeOk(sendInvokeResult, { payloadContains: "local-ok" });
   });
 
+  it("reports CANCELED instead of completion when local execution aborts", async () => {
+    const { sendExecFinishedEvent, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      runCommand: vi.fn(async () => ({
+        success: false,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        aborted: true,
+        exitCode: undefined,
+        error: "aborted",
+      })),
+    });
+
+    expect(sendExecFinishedEvent).not.toHaveBeenCalled();
+    expect(sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          code: "CANCELED",
+          message: "node invoke canceled",
+        }),
+      }),
+    );
+  });
+
   it("uses mac app exec host when explicitly preferred", async () => {
     const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
       preferMacAppExecHost: true,

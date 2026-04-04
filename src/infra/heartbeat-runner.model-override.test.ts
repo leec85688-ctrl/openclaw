@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
@@ -6,6 +7,7 @@ import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
+import * as sessionUtils from "../gateway/session-utils.fs.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -179,6 +181,67 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
       // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
       expect(result.ctx?.SessionKey).toBe(`${sessionKey}:heartbeat`);
+    });
+  });
+
+  it("archives the previous isolated heartbeat transcript after rotating the session", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const previousSessionId = "previous-heartbeat-session";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "main-session-id",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+          },
+          [`${sessionKey}:heartbeat`]: {
+            sessionId: previousSessionId,
+            updatedAt: Date.now() - 60_000,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            sessionFile: "/tmp/previous-heartbeat-session.jsonl",
+          },
+        }),
+        "utf8",
+      );
+
+      vi.spyOn(replyModule, "getReplyFromConfig").mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(archiveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: previousSessionId,
+          storePath,
+          reason: "reset",
+        }),
+      );
     });
   });
 

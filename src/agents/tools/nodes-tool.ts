@@ -643,35 +643,14 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-              "node.invoke",
-              gatewayOpts,
-              {
-                nodeId,
-                command: "system.run.prepare",
-                params: {
-                  command,
-                  cwd,
-                  agentId,
-                  sessionKey,
-                },
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              },
-            );
-            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-            if (!prepared) {
-              throw new Error("invalid system.run.prepare response");
-            }
             const runParams = {
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              cwd: prepared.plan.cwd ?? cwd,
+              command,
+              cwd,
               env,
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
-              agentId: prepared.plan.agentId ?? agentId,
-              sessionKey: prepared.plan.sessionKey ?? sessionKey,
+              agentId,
+              sessionKey,
             };
 
             // First attempt without approval flags.
@@ -693,6 +672,36 @@ export function createNodesTool(options?: {
 
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
+            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              gatewayOpts,
+              {
+                nodeId,
+                command: "system.run.prepare",
+                params: {
+                  command,
+                  cwd,
+                  agentId,
+                  sessionKey,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            );
+            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            if (!prepared) {
+              throw new Error("invalid system.run.prepare response");
+            }
+            const approvedRunParams = {
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.commandText,
+              cwd: prepared.plan.cwd ?? cwd,
+              env,
+              timeoutMs: commandTimeoutMs,
+              needsScreenRecording,
+              agentId: prepared.plan.agentId ?? agentId,
+              sessionKey: prepared.plan.sessionKey ?? sessionKey,
+            };
             const APPROVAL_TIMEOUT_MS = 120_000;
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
@@ -735,7 +744,7 @@ export function createNodesTool(options?: {
               nodeId,
               command: "system.run",
               params: {
-                ...runParams,
+                ...approvedRunParams,
                 runId: approvalId,
                 approved: true,
                 approvalDecision,

@@ -40,6 +40,7 @@ type CallGatewayBaseOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  abortSignal?: AbortSignal;
   config?: OpenClawConfig;
   method: string;
   params?: unknown;
@@ -80,6 +81,12 @@ export type GatewayConnectionDetails = {
   remoteFallbackNote?: string;
   message: string;
 };
+
+function createAbortError(message = "Aborted"): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
 
 function shouldAttachDeviceIdentityForGatewayCall(params: {
   url: string;
@@ -802,12 +809,19 @@ async function executeGatewayRequestWithScopes<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    const abortSignal = opts.abortSignal;
+    let removeAbortListener: (() => void) | null = null;
+    let timer: NodeJS.Timeout | null = null;
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      removeAbortListener?.();
+      removeAbortListener = null;
       if (err) {
         reject(err);
       } else {
@@ -863,7 +877,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    const timer = setTimeout(() => {
+    const onAbort = () => {
+      ignoreClose = true;
+      client.stop();
+      stop(createAbortError(`gateway request aborted for ${opts.method}`));
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      } else {
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+      }
+    }
+
+    timer = setTimeout(() => {
       ignoreClose = true;
       client.stop();
       stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));

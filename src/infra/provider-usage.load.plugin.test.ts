@@ -63,4 +63,31 @@ describe("provider-usage.load plugin boundary", () => {
       }),
     );
   });
+
+  it("turns plugin usage failures into provider error snapshots instead of rejecting", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockRejectedValueOnce(new Error("plugin boom"));
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        auth: [{ provider: "github-copilot", token: "copilot-token" }],
+        fetch: mockFetch as unknown as typeof fetch,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "github-copilot",
+          displayName: "Copilot",
+          windows: [],
+          error: "plugin boom",
+        },
+      ],
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });

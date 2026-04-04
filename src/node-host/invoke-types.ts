@@ -10,6 +10,7 @@ export type SystemRunParams = {
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  sessionId?: string | null;
   approved?: boolean | null;
   approvalDecision?: string | null;
   runId?: string | null;
@@ -19,6 +20,7 @@ export type SystemRunParams = {
 export type RunResult = {
   exitCode?: number;
   timedOut: boolean;
+  aborted?: boolean;
   success: boolean;
   stdout: string;
   stderr: string;
@@ -28,6 +30,7 @@ export type RunResult = {
 
 export type ExecEventPayload = {
   sessionKey: string;
+  sessionId?: string | null;
   runId: string;
   host: string;
   command?: string;
@@ -50,6 +53,7 @@ export type ExecFinishedResult = {
 
 export type ExecFinishedEventParams = {
   sessionKey: string;
+  sessionId?: string | null;
   runId: string;
   commandText: string;
   result: ExecFinishedResult;

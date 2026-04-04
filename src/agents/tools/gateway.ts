@@ -11,6 +11,7 @@ export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   timeoutMs?: number;
+  abortSignal?: AbortSignal;
 };
 
 type GatewayOverrideTarget = "local" | "remote";
@@ -148,6 +149,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,
+    abortSignal: opts.abortSignal,
     method,
     params,
     timeoutMs: gateway.timeoutMs,

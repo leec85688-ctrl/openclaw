@@ -1044,6 +1044,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         params: forwardedParams.params,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
+        requesterConnId: client?.connId,
       });
       if (!res.ok) {
         if (

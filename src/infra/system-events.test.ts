@@ -83,13 +83,16 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Node connected", {
       sessionKey: key,
       contextKey: "build:123",
+      sessionId: "sess-current",
     });
 
     const peeked = peekSystemEventEntries(key);
     expect(hasSystemEvents(key)).toBe(true);
     expect(peeked).toHaveLength(1);
     peeked[0].text = "mutated";
+    peeked[0].sessionId = "sess-mutated";
     expect(peekSystemEvents(key)).toEqual(["Node connected"]);
+    expect(peekSystemEventEntries(key)[0]?.sessionId).toBe("sess-current");
 
     expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual(["Node connected"]);
     expect(hasSystemEvents(key)).toBe(false);

@@ -83,6 +83,9 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
       error: {
         code: -32603,
         message: "mock ensure failure",
+        data: {
+          acpxCode: "RUNTIME",
+        },
       },
     });
     process.exit(1);
@@ -184,6 +187,20 @@ if (command === "set") {
 
 if (command === "status") {
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
+  if (process.env.MOCK_ACPX_STATUS_EXIT_1 === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32603,
+        message: "mock status failure",
+        data: {
+          acpxCode: "RUNTIME",
+        },
+      },
+    });
+    process.exit(1);
+  }
   const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
   emitJson({
@@ -397,6 +414,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+  delete process.env.MOCK_ACPX_STATUS_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;

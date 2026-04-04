@@ -30,6 +30,7 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  requestSessionId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;

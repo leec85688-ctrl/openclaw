@@ -130,6 +130,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
 export type HandleSystemRunInvokeOptions = {
   client: GatewayClient;
   params: SystemRunParams;
+  abortSignal?: AbortSignal;
   skillBins: SkillBinsProvider;
   execHostEnforced: boolean;
   execHostFallbackAllowed: boolean;
@@ -142,6 +143,7 @@ export type HandleSystemRunInvokeOptions = {
     cwd: string | undefined,
     env: Record<string, string> | undefined,
     timeoutMs: number | undefined,
+    abortSignal?: AbortSignal,
   ) => Promise<RunResult>;
   runViaMacAppExecHost: (params: {
     approvals: ReturnType<typeof resolveExecApprovals>;
@@ -397,6 +399,13 @@ async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
+  if (opts.abortSignal?.aborted) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "CANCELED", message: "node invoke canceled" },
+    });
+    return;
+  }
   if (
     phase.approvedCwdSnapshot &&
     !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
@@ -538,7 +547,16 @@ async function executeSystemRunPhase(
     segments: phase.segments,
   });
 
-  const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
+  const result = opts.abortSignal
+    ? await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs, opts.abortSignal)
+    : await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
+  if (result.aborted) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "CANCELED", message: "node invoke canceled" },
+    });
+    return;
+  }
   applyOutputTruncation(result);
   await sendSystemRunCompleted(
     opts,

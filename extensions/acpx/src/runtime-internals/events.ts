@@ -13,13 +13,24 @@ export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
   if (!isRecord(value)) {
     return null;
   }
-  if (asTrimmedString(value.type) !== "error") {
+  if (asTrimmedString(value.type) === "error") {
+    return {
+      message: asTrimmedString(value.message) || "acpx reported an error",
+      code: asOptionalString(value.code),
+      retryable: asOptionalBoolean(value.retryable),
+    };
+  }
+
+  const error = value.error;
+  if (!isRecord(error)) {
     return null;
   }
+  const data = isRecord(error.data) ? error.data : null;
   return {
-    message: asTrimmedString(value.message) || "acpx reported an error",
-    code: asOptionalString(value.code),
-    retryable: asOptionalBoolean(value.retryable),
+    message:
+      asTrimmedString(error.message) || asTrimmedString(data?.message) || "acpx reported an error",
+    code: asOptionalString(data?.acpxCode) || asOptionalString(data?.code),
+    retryable: asOptionalBoolean(data?.retryable) ?? asOptionalBoolean(error.retryable),
   };
 }
 

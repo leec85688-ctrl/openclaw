@@ -126,4 +126,29 @@ describe("resolveBootstrapContextForRun", () => {
 
     expect(files).toEqual([]);
   });
+
+  it("keeps SOUL.md in the reduced bootstrap allowlist for subagent sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agent rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "tool notes", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "identity", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "user profile", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "heartbeat only", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "bootstrap only", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "memory only", "utf8");
+
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      sessionKey: "agent:main:subagent:child",
+    });
+    const contextPaths = result.contextFiles.map((file) => path.basename(file.path));
+
+    expect(contextPaths).toEqual(
+      expect.arrayContaining(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]),
+    );
+    expect(contextPaths).not.toContain("HEARTBEAT.md");
+    expect(contextPaths).not.toContain("BOOTSTRAP.md");
+    expect(contextPaths).not.toContain("MEMORY.md");
+  });
 });

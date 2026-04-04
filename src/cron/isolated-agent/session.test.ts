@@ -136,6 +136,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
+      expect(result.previousSessionEntry?.sessionId).toBe("old-session-id");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
@@ -144,6 +145,7 @@ describe("resolveCronSession", () => {
         entry: {
           sessionId: "existing-session-id-456",
           updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/existing-session-id-456.jsonl",
           systemSent: true,
           modelOverride: "sonnet-4",
           providerOverride: "anthropic",
@@ -157,7 +159,25 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      expect(result.previousSessionEntry?.sessionId).toBe("existing-session-id-456");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("clears inherited sessionFile when forceNew creates a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-456",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/existing-session-id-456.jsonl",
+          systemSent: true,
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
     });
 
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
@@ -246,6 +266,7 @@ describe("resolveCronSession", () => {
         to: "channel:C0XXXXXXXXX",
         threadId: "1737500000.123456",
       });
+      expect(result.previousSessionEntry).toBeUndefined();
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {

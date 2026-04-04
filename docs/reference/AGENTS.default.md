@@ -48,9 +48,10 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Session start (required)
 
-- Read `SOUL.md`, `USER.md`, and today+yesterday in `memory/`.
-- Read `MEMORY.md` when present; only fall back to lowercase `memory.md` when `MEMORY.md` is absent.
-- Do it before responding.
+- Read `SOUL.md` and `USER.md` before responding.
+- In the main session, also read today+yesterday in `memory/`.
+- In the main session, read `MEMORY.md` when present; only fall back to lowercase `memory.md` when `MEMORY.md` is absent.
+- In subagent/worker/isolated sessions, stay task-local by default. Do not proactively load `MEMORY.md` or daily memory files unless the task explicitly requires broader context.
 
 ## Soul (required)
 
@@ -68,7 +69,8 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
 - Long-term memory: `MEMORY.md` for durable facts, preferences, and decisions.
 - Lowercase `memory.md` is legacy fallback only; do not keep both root files on purpose.
-- On session start, read today + yesterday + `MEMORY.md` when present, otherwise `memory.md`.
+- On main-session start, read today + yesterday + `MEMORY.md` when present, otherwise `memory.md`.
+- In subagent/worker sessions, only read memory files when the assigned task truly needs them.
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 

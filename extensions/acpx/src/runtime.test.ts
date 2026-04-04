@@ -238,6 +238,35 @@ describe("AcpxRuntime", () => {
     }
   });
 
+  it("surfaces structured control-command errors when ensure recovery fails", async () => {
+    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
+    process.env.MOCK_ACPX_STATUS_EXIT_1 = "1";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:ensure-hard-failure";
+
+      await expect(
+        runtime.ensureSession({
+          sessionKey,
+          agent: "codex",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("RUNTIME: mock ensure failure"),
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+      const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+      expect(ensureIndex).toBeGreaterThanOrEqual(0);
+      expect(statusIndex).toBeGreaterThan(ensureIndex);
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+      delete process.env.MOCK_ACPX_STATUS_EXIT_1;
+    }
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 

@@ -16,6 +16,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import {
+  coerceNodeInvokeCancelPayload,
   coerceNodeInvokePayload,
   handleInvoke,
   type SkillBinsProvider,
@@ -174,6 +175,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
+  const activeInvokes = new Map<string, AbortController>();
 
   const client = new GatewayClient({
     url,
@@ -198,6 +200,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
     onEvent: (evt) => {
+      if (evt.event === "node.invoke.cancel") {
+        const payload = coerceNodeInvokeCancelPayload(evt.payload);
+        if (!payload) {
+          return;
+        }
+        activeInvokes.get(payload.id)?.abort();
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }
@@ -205,7 +215,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       if (!payload) {
         return;
       }
-      void handleInvoke(payload, client, skillBins);
+      const invokeAbort = new AbortController();
+      activeInvokes.set(payload.id, invokeAbort);
+      void handleInvoke(payload, client, skillBins, invokeAbort.signal).finally(() => {
+        const current = activeInvokes.get(payload.id);
+        if (current === invokeAbort) {
+          activeInvokes.delete(payload.id);
+        }
+      });
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
@@ -213,6 +230,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       console.error(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
+      for (const controller of activeInvokes.values()) {
+        controller.abort();
+      }
+      activeInvokes.clear();
       // eslint-disable-next-line no-console
       console.error(`node host gateway closed (${code}): ${reason}`);
     },

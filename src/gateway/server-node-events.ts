@@ -525,6 +525,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKey) {
         return;
       }
+      const sessionId =
+        typeof obj.sessionId === "string" && obj.sessionId.trim() ? obj.sessionId.trim() : null;
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
@@ -571,7 +573,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
+      enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: runId ? `exec:${runId}` : "exec",
+        sessionId,
+      });
       // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
       // keys should keep legacy unscoped behavior so enabled non-main heartbeat
       // agents still run when no explicit agent session is provided.

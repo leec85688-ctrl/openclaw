@@ -1,6 +1,7 @@
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
+import { buildUsageErrorSnapshot } from "./provider-usage.fetch.shared.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchClaudeUsage,
@@ -127,6 +128,22 @@ type UsageSummaryOptions = {
   fetch?: typeof fetch;
 };
 
+function resolveUsageSnapshotErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message) {
+      return message;
+    }
+  }
+  if (typeof error === "string") {
+    const message = error.trim();
+    if (message) {
+      return message;
+    }
+  }
+  return "Unknown error";
+}
+
 async function fetchProviderUsageSnapshot(params: {
   auth: ProviderAuth;
   config: OpenClawConfig;
@@ -194,7 +211,9 @@ export async function loadProviderUsageSummary(
         workspaceDir: opts.workspaceDir,
         timeoutMs,
         fetchFn,
-      }),
+      }).catch((error: unknown) =>
+        buildUsageErrorSnapshot(auth.provider, resolveUsageSnapshotErrorMessage(error)),
+      ),
       timeoutMs + 1000,
       {
         provider: auth.provider,

@@ -124,6 +124,7 @@ export const GATEWAY_EVENTS = [
   "node.pair.requested",
   "node.pair.resolved",
   "node.invoke.request",
+  "node.invoke.cancel",
   "device.pair.requested",
   "device.pair.resolved",
   "voicewake.changed",

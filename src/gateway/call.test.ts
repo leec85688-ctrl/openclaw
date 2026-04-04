@@ -23,6 +23,7 @@ let lastRequestOptions: {
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
+let stopCalls = 0;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
@@ -69,7 +70,9 @@ vi.mock("./client.js", () => ({
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
     }
-    stop() {}
+    stop() {
+      stopCalls += 1;
+    }
   },
 }));
 
@@ -83,6 +86,7 @@ function resetGatewayCallMocks() {
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
   lastRequestOptions = null;
+  stopCalls = 0;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
@@ -602,6 +606,23 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
     expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
+  it("aborts the temporary gateway client when the caller aborts", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+
+    const promise = callGateway({
+      method: "health",
+      abortSignal: controller.signal,
+      timeoutMs: 45_000,
+    });
+
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    expect(stopCalls).toBe(1);
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

@@ -55,6 +55,18 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+function isAuthorizedNewCommand(text: string, commandAuthorized: boolean | undefined): boolean {
+  if (!commandAuthorized) {
+    return false;
+  }
+  return /^\/new(?:\s|$)/iu.test(text.trim());
+}
+
+function isAcpLikeSessionKey(sessionKey: string | undefined): boolean {
+  return /(^|:)acp(?::|$)/iu.test((sessionKey ?? "").trim());
+}
+
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -607,21 +619,40 @@ export async function handleFeishuMessage(params: {
       });
       const boundSessionKey = threadBinding?.targetSessionKey?.trim();
       if (threadBinding && boundSessionKey) {
-        route = {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-          lastRoutePolicy: deriveLastRoutePolicy({
+        if (
+          isAuthorizedNewCommand(commandProbeBody, commandAuthorized) &&
+          !isAcpLikeSessionKey(boundSessionKey)
+        ) {
+          try {
+            await getSessionBindingService().unbind({
+              bindingId: threadBinding.bindingId,
+              reason: "new-session-command",
+            });
+            log(
+              `feishu[${account.accountId}]: detached bound conversation ${currentConversationId} from ${boundSessionKey} via /new`,
+            );
+          } catch (err) {
+            log(
+              `feishu[${account.accountId}]: failed to detach bound conversation ${currentConversationId} from ${boundSessionKey} via /new: ${String(err)}`,
+            );
+          }
+        } else {
+          route = {
+            ...route,
             sessionKey: boundSessionKey,
-            mainSessionKey: route.mainSessionKey,
-          }),
-          matchedBy: "binding.channel",
-        };
-        configuredBinding = null;
-        getSessionBindingService().touch(threadBinding.bindingId);
-        log(
-          `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
-        );
+            agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
+            lastRoutePolicy: deriveLastRoutePolicy({
+              sessionKey: boundSessionKey,
+              mainSessionKey: route.mainSessionKey,
+            }),
+            matchedBy: "binding.channel",
+          };
+          configuredBinding = null;
+          getSessionBindingService().touch(threadBinding.bindingId);
+          log(
+            `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
+          );
+        }
       }
     }
 

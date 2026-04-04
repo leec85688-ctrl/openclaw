@@ -91,14 +91,21 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it("omits rawCommand when preparing wrapped argv execution", async () => {
+  it("omits rawCommand when preparing wrapped argv execution after approval is required", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
       {
         nodeId: "node-1",
         commands: ["system.run"],
       },
     ]);
-    gatewayMocks.callGatewayTool.mockImplementation(async (_method, _opts, payload) => {
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, payload) => {
+      if (payload?.command === "system.run") {
+        const approved = (payload?.params as { approved?: boolean } | undefined)?.approved === true;
+        if (!approved) {
+          throw new Error("SYSTEM_RUN_DENIED: approval required");
+        }
+        return { payload: { ok: true } };
+      }
       if (payload?.command === "system.run.prepare") {
         return {
           payload: {
@@ -113,8 +120,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
           },
         };
       }
-      if (payload?.command === "system.run") {
-        return { payload: { ok: true } };
+      if (method === "exec.approval.request") {
+        return { decision: "allow-once" };
       }
       throw new Error(`unexpected command: ${String(payload?.command)}`);
     });

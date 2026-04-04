@@ -96,6 +96,29 @@ describe("resolveGatewayProgramArguments", () => {
     ]);
   });
 
+  it("resolves the live openclaw-current wrapper to the live dist entrypoint", async () => {
+    const argv1 = path.resolve("/Users/test/openclaw-current/openclaw.mjs");
+    const indexPath = path.resolve("/Users/test/openclaw-current/dist/index.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(argv1);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === indexPath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      indexPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
   it("uses src/entry.ts for bun dev mode", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");

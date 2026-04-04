@@ -360,12 +360,12 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 50000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );
@@ -389,10 +389,10 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 50000 },
       expect.objectContaining({
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );

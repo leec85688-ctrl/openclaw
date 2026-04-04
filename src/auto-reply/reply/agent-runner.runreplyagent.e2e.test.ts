@@ -78,7 +78,8 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("../../agents/pi-embedded-runner/compact.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/pi-embedded-runner/compact.runtime.js")>();
+  const actual =
+    await importOriginal<typeof import("../../agents/pi-embedded-runner/compact.runtime.js")>();
   return {
     compactEmbeddedPiSessionDirect: (params: unknown) =>
       state.useCompactEmbeddedPiSessionDirectMock
@@ -1214,6 +1215,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionStore.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(sessionStore.main.fallbackNoticeActiveModel).toBeUndefined();
       expect(sessionStore.main.fallbackNoticeReason).toBeUndefined();
+      await expect(fs.access(transcriptPath)).rejects.toBeDefined();
+      const files = await fs.readdir(path.dirname(transcriptPath));
+      expect(files.some((name) => name.startsWith(`${path.basename(transcriptPath)}.reset.`))).toBe(
+        true,
+      );
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
@@ -1434,6 +1440,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       await expect(fs.access(transcriptPath)).rejects.toBeDefined();
+      const files = await fs.readdir(path.dirname(transcriptPath));
+      expect(files.some((name) => name.startsWith(`${path.basename(transcriptPath)}.reset.`))).toBe(
+        true,
+      );
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);

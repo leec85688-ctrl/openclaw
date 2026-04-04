@@ -18,6 +18,13 @@ function createQmdConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createBuiltinConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+  return {
+    agents,
+    memory: { backend: "builtin" },
+  } as OpenClawConfig;
+}
+
 function createGatewayLogMock() {
   return { info: vi.fn(), warn: vi.fn() };
 }
@@ -27,9 +34,12 @@ describe("startGatewayMemoryBackend", () => {
     getMemorySearchManagerMock.mockClear();
   });
 
-  it("skips initialization when memory backend is not qmd", async () => {
+  it("skips initialization when memory search is disabled globally", async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: {
+        defaults: { memorySearch: { enabled: false } },
+        list: [{ id: "main", default: true }],
+      },
       memory: { backend: "builtin" },
     } as OpenClawConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
@@ -38,6 +48,41 @@ describe("startGatewayMemoryBackend", () => {
 
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("initializes builtin backend and runs startup sync for each configured agent", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "ops", default: true }, { id: "main" }] });
+    const log = createGatewayLogMock();
+    const syncOps = vi.fn().mockResolvedValue(undefined);
+    const syncMain = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManagerMock
+      .mockResolvedValueOnce({ manager: { sync: syncOps } })
+      .mockResolvedValueOnce({ manager: { sync: syncMain } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, { cfg, agentId: "ops" });
+    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, { cfg, agentId: "main" });
+    expect(syncOps).toHaveBeenCalledWith({ reason: "startup" });
+    expect(syncMain).toHaveBeenCalledWith({ reason: "startup" });
+    expect(log.info).toHaveBeenNthCalledWith(
+      1,
+      'builtin memory startup initialization armed for agent "ops"',
+    );
+    expect(log.info).toHaveBeenNthCalledWith(
+      2,
+      'builtin memory startup sync completed for agent "ops"',
+    );
+    expect(log.info).toHaveBeenNthCalledWith(
+      3,
+      'builtin memory startup initialization armed for agent "main"',
+    );
+    expect(log.info).toHaveBeenNthCalledWith(
+      4,
+      'builtin memory startup sync completed for agent "main"',
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -77,6 +122,23 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization armed for agent "ops"',
     );
+  });
+
+  it("logs a warning when builtin startup sync fails and continues with other agents", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "main", default: true }, { id: "ops" }] });
+    const log = createGatewayLogMock();
+    const syncMain = vi.fn().mockRejectedValue(new Error("db busy"));
+    const syncOps = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManagerMock
+      .mockResolvedValueOnce({ manager: { sync: syncMain } })
+      .mockResolvedValueOnce({ manager: { sync: syncOps } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      'builtin memory startup sync failed for agent "main": Error: db busy',
+    );
+    expect(log.info).toHaveBeenCalledWith('builtin memory startup sync completed for agent "ops"');
   });
 
   it("skips agents with memory search disabled", async () => {

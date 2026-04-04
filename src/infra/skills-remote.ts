@@ -18,7 +18,10 @@ type RemoteNodeRecord = {
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
+const DEFAULT_REMOTE_BIN_PROBE_TIMEOUT_MS = 30_000;
+const REMOTE_BIN_PROBE_RETRY_DELAY_MS = 10_000;
 const remoteNodes = new Map<string, RemoteNodeRecord>();
+const remoteBinProbeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let remoteRegistry: NodeRegistry | null = null;
 
 function describeNode(nodeId: string): string {
@@ -72,6 +75,20 @@ function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
     return;
   }
   log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
+}
+
+function shouldRetryRemoteBinProbe(err: unknown) {
+  const message = extractErrorMessage(err)?.toLowerCase() ?? "";
+  return message.includes("invoke timed out") || message.includes("timeout");
+}
+
+function clearRemoteBinProbeRetry(nodeId: string) {
+  const timer = remoteBinProbeRetryTimers.get(nodeId);
+  if (!timer) {
+    return;
+  }
+  clearTimeout(timer);
+  remoteBinProbeRetryTimers.delete(nodeId);
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -169,6 +186,7 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
 }
 
 export function removeRemoteNodeInfo(nodeId: string) {
+  clearRemoteBinProbeRetry(nodeId);
   remoteNodes.delete(nodeId);
 }
 
@@ -245,6 +263,7 @@ export async function refreshRemoteNodeBins(params: {
   commands?: string[];
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  retryAttempt?: number;
 }) {
   if (!remoteRegistry) {
     return;
@@ -267,8 +286,24 @@ export async function refreshRemoteNodeBins(params: {
     }
   }
   if (requiredBins.size === 0) {
+    clearRemoteBinProbeRetry(params.nodeId);
     return;
   }
+
+  const scheduleRetry = () => {
+    if ((params.retryAttempt ?? 0) >= 1) {
+      return;
+    }
+    clearRemoteBinProbeRetry(params.nodeId);
+    const timer = setTimeout(() => {
+      remoteBinProbeRetryTimers.delete(params.nodeId);
+      void refreshRemoteNodeBins({
+        ...params,
+        retryAttempt: (params.retryAttempt ?? 0) + 1,
+      });
+    }, REMOTE_BIN_PROBE_RETRY_DELAY_MS);
+    remoteBinProbeRetryTimers.set(params.nodeId, timer);
+  };
 
   try {
     const binsList = [...requiredBins];
@@ -278,7 +313,7 @@ export async function refreshRemoteNodeBins(params: {
             nodeId: params.nodeId,
             command: "system.which",
             params: { bins: binsList },
-            timeoutMs: params.timeoutMs ?? 15_000,
+            timeoutMs: params.timeoutMs ?? DEFAULT_REMOTE_BIN_PROBE_TIMEOUT_MS,
           }
         : {
             nodeId: params.nodeId,
@@ -286,13 +321,17 @@ export async function refreshRemoteNodeBins(params: {
             params: {
               command: ["/bin/sh", "-lc", buildBinProbeScript(binsList)],
             },
-            timeoutMs: params.timeoutMs ?? 15_000,
+            timeoutMs: params.timeoutMs ?? DEFAULT_REMOTE_BIN_PROBE_TIMEOUT_MS,
           },
     );
     if (!res.ok) {
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
+      if (shouldRetryRemoteBinProbe(res.error?.message)) {
+        scheduleRetry();
+      }
       return;
     }
+    clearRemoteBinProbeRetry(params.nodeId);
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
     const existingBins = remoteNodes.get(params.nodeId)?.bins;
     const nextBins = new Set(bins);
@@ -305,6 +344,9 @@ export async function refreshRemoteNodeBins(params: {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     logRemoteBinProbeFailure(params.nodeId, err);
+    if (shouldRetryRemoteBinProbe(err)) {
+      scheduleRetry();
+    }
   }
 }
 

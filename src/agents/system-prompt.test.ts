@@ -394,10 +394,22 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
+      toolNames: ["session_status"],
     });
 
     expect(prompt).toContain("session_status");
     expect(prompt).toContain("current date");
+  });
+
+  it("does not mention session_status when that tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userTimezone: "America/Chicago",
+      promptMode: "minimal",
+      toolNames: ["read"],
+    });
+
+    expect(prompt).not.toContain("run session_status");
   });
 
   // The system prompt intentionally does NOT include the current date/time.
@@ -529,6 +541,20 @@ describe("buildAgentSystemPrompt", () => {
       ],
     });
 
+    expect(prompt).toContain(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+    );
+  });
+
+  it("keeps SOUL guidance in minimal prompt mode for subagents", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      contextFiles: [{ path: "SOUL.md", content: "Be bold but careful." }],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("## SOUL.md");
     expect(prompt).toContain(
       "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
     );

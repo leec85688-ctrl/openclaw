@@ -31,10 +31,12 @@ export type ExecuteNodeHostCommandParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  abortSignal?: AbortSignal;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;
   boundNode?: string;
   sessionKey?: string;
+  sessionId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -91,31 +93,6 @@ export async function executeNodeHostCommand(
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-    "node.invoke",
-    { timeoutMs: 15_000 },
-    {
-      nodeId,
-      command: "system.run.prepare",
-      params: {
-        command: argv,
-        rawCommand: params.command,
-        cwd: params.workdir,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      },
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-  if (!prepared) {
-    throw new Error("invalid system.run.prepare response");
-  }
-  const runArgv = prepared.plan.argv;
-  const runRawCommand = prepared.plan.commandText;
-  const runCwd = prepared.plan.cwd ?? params.workdir;
-  const runAgentId = prepared.plan.agentId ?? params.agentId;
-  const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
   const nodeEnv = params.requestedEnv ? { ...params.requestedEnv } : undefined;
   const baseAllowlistEval = evaluateShellAllowlist({
@@ -133,7 +110,7 @@ export async function executeNodeHostCommand(
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
-        { timeoutMs: 10_000 },
+        { timeoutMs: 10_000, abortSignal: params.abortSignal },
         { nodeId },
       );
       const approvalsFile =
@@ -182,6 +159,39 @@ export async function executeNodeHostCommand(
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
       5_000,
   );
+  let prepared: ReturnType<typeof parsePreparedSystemRunPayload> | null = null;
+  let runArgv = argv;
+  let runRawCommand = params.command;
+  let runCwd = params.workdir;
+  let runAgentId = params.agentId;
+  let runSessionKey = params.sessionKey;
+  if (requiresAsk) {
+    const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+      "node.invoke",
+      { timeoutMs: 15_000, abortSignal: params.abortSignal },
+      {
+        nodeId,
+        command: "system.run.prepare",
+        params: {
+          command: argv,
+          rawCommand: params.command,
+          cwd: params.workdir,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        },
+        idempotencyKey: crypto.randomUUID(),
+      },
+    );
+    prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+    if (!prepared) {
+      throw new Error("invalid system.run.prepare response");
+    }
+    runArgv = prepared.plan.argv;
+    runRawCommand = prepared.plan.commandText;
+    runCwd = prepared.plan.cwd ?? params.workdir;
+    runAgentId = prepared.plan.agentId ?? params.agentId;
+    runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
+  }
   const buildInvokeParams = (
     approvedByAsk: boolean,
     approvalDecision: "allow-once" | "allow-always" | null,
@@ -191,6 +201,7 @@ export async function executeNodeHostCommand(
     ({
       nodeId,
       command: "system.run",
+      timeoutMs: invokeTimeoutMs,
       params: {
         command: runArgv,
         rawCommand: runRawCommand,
@@ -199,6 +210,7 @@ export async function executeNodeHostCommand(
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
         agentId: runAgentId,
         sessionKey: runSessionKey,
+        sessionId: params.sessionId,
         approved: approvedByAsk,
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
@@ -208,6 +220,9 @@ export async function executeNodeHostCommand(
     }) satisfies Record<string, unknown>;
 
   if (requiresAsk) {
+    if (!prepared) {
+      throw new Error("invalid system.run.prepare response");
+    }
     const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -309,7 +324,7 @@ export async function executeNodeHostCommand(
           };
         }>(
           "node.invoke",
-          { timeoutMs: invokeTimeoutMs },
+          { timeoutMs: invokeTimeoutMs, abortSignal: params.abortSignal },
           buildInvokeParams(approvedByAsk, approvalDecision, approvalId, true),
         );
         const payload =
@@ -355,7 +370,7 @@ export async function executeNodeHostCommand(
   const startedAt = Date.now();
   const raw = await callGatewayTool(
     "node.invoke",
-    { timeoutMs: invokeTimeoutMs },
+    { timeoutMs: invokeTimeoutMs, abortSignal: params.abortSignal },
     buildInvokeParams(false, null),
   );
   const payload =

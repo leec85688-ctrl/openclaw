@@ -19,6 +19,8 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain(
       "Current time: Tuesday, March 3rd, 2026 — 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
     );
+    expect(prompt).toContain("Today in your timezone is 2026-03-03.");
+    expect(prompt).toContain("read memory/2026-03-03.md exactly");
   });
 
   it("does not append a duplicate current time line", () => {

@@ -63,10 +63,14 @@ export function resolveCronSession(params: {
     sessionKey: params.sessionKey,
     previousSessionId: isNewSession ? entry?.sessionId : undefined,
   });
+  const previousSessionEntry = isNewSession && entry?.sessionId ? { ...entry } : undefined;
 
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
     ...entry,
+    ...(isNewSession && {
+      sessionFile: undefined,
+    }),
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
@@ -85,5 +89,5 @@ export function resolveCronSession(params: {
       deliveryContext: undefined,
     }),
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession };
+  return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionEntry };
 }

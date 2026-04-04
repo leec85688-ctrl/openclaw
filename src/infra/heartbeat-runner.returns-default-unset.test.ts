@@ -1438,8 +1438,66 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
       expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("exec finished: backup completed");
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("ignores stale exec events from a previous session id after reset", async () => {
+    const tmpDir = await createCaseDir("hb-exec-stale-session-id");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sess-current",
+          updatedAt: now,
+          lastSessionResetAt: now,
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: stale backup completed", {
+      sessionKey,
+      contextKey: "exec:stale-backup",
+      sessionId: "sess-old",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("heartbeat");
+      expect(calledCtx.Body).not.toContain("exec finished: stale backup completed");
     } finally {
       replySpy.mockRestore();
     }

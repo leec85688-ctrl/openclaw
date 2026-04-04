@@ -18,4 +18,15 @@ describe("feishu tools config", () => {
 
     expect(parsed.tools?.chat).toBe(false);
   });
+
+  it("accepts tools.bitable in config schema", () => {
+    const parsed = FeishuConfigSchema.parse({
+      enabled: true,
+      tools: {
+        bitable: false,
+      },
+    });
+
+    expect(parsed.tools?.bitable).toBe(false);
+  });
 });

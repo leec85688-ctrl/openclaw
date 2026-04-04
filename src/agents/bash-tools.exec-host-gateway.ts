@@ -50,6 +50,7 @@ export type ProcessGatewayAllowlistParams = {
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -272,6 +273,7 @@ export async function processGatewayAllowlist(
           notifyOnExitEmptySuccess: false,
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey,
+          sessionId: params.sessionId,
           timeoutSec: effectiveTimeout,
         });
       } catch {
